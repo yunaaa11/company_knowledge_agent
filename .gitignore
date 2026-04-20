@@ -1,0 +1,25 @@
+# 虚拟环境
+myenv/
+env/
+venv/
+
+# 数据缓存与向量库
+data/processed/
+data/doc_cache.json
+vector_db/
+*.pkl
+*.parquet
+
+# IDE
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+
+# 环境变量
+.env
+
+# 日志与临时文件
+logs/
+*.log
+temp/
