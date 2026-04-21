@@ -6,6 +6,7 @@ venv/
 # 数据缓存与向量库
 data/processed/
 data/doc_cache.json
+data/doc_store
 vector_db/
 *.pkl
 *.parquet

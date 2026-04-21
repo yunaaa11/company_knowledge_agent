@@ -30,5 +30,6 @@ class HybridSearcher:
             
         return EnsembleRetriever(
             retrievers=[self.bm25_retriever, self.vector_retriever],
-            weights=[0.4, 0.6] 
+            #微调权重：提升 BM25 的影响力，利用关键词频次锁定行政文档
+            weights=[0.6, 0.4] 
         )
