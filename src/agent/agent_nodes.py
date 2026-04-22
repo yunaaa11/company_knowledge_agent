@@ -47,6 +47,8 @@ class Nodes:
     "5. 禁止给出超出制度范围的建议（如“可以申请更多年假”）。\n"
 )
         prompt = f"{system_prompt}\n\n根据资料：{context} 回答：{state['rewrite_query']}"
-        answer = self.llm.invoke(prompt)
-        return {"answer":answer}
+        response = self.llm.invoke(prompt)
+        answer_text = response.content  # 提取纯文本内容
+        
+        return {"answer": answer_text}
         

@@ -14,8 +14,9 @@ class HybridSearcher:
             with open(Config.bm25_path, "rb") as f:
                  # pickle.load 反序列化，将文件中的对象恢复为 BM25 检索器实例
                 self.bm25_retriever = pickle.load(f)
+                print(f"✅ BM25 成功加载，索引内含文档数: {len(self.bm25_retriever.docs)}")
             # 设置每次检索返回的文档数量
-            self.bm25_retriever.k = 10
+            self.bm25_retriever.k = 15
         else:
                 print(f"⚠️ 警告: 未找到 BM25 索引文件 {Config.bm25_path}")
                 self.bm25_retriever = None
@@ -31,5 +32,5 @@ class HybridSearcher:
         return EnsembleRetriever(
             retrievers=[self.bm25_retriever, self.vector_retriever],
             #微调权重：提升 BM25 的影响力，利用关键词频次锁定行政文档
-            weights=[0.6, 0.4] 
+            weights=[0.4, 0.6] 
         )
