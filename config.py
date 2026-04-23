@@ -14,3 +14,9 @@ class Config:
     cache_file= os.getenv("cache_file") 
     HF_TOKEN= os.getenv("HF_TOKEN")   
     HF_ENDPOINT= os.getenv("HF_ENDPOINT") 
+    # Redis 配置
+    REDIS_HOST = os.getenv("REDIS_HOST") 
+    REDIS_PORT = os.getenv("REDIS_PORT") 
+    REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") 
+    # 缓存开关
+    ENABLE_CACHE = os.getenv("ENABLE_CACHE") 

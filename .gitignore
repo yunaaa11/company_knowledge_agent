@@ -24,3 +24,5 @@ __pycache__/
 logs/
 *.log
 temp/
+
+evaluation_report.csv
