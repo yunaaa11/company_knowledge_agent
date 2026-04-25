@@ -21,7 +21,8 @@ def run_interactive_session():
     hs=HybridSearcher(vm)
     base_retriever=hs.get_ensemble_retriever()
     reranker=RerankProcessor(base_retriever)
-    app=create_graph(vm,reranker,llm)
+    app=create_graph(vm,reranker,llm)  
+    # app = create_graph(vm, base_retriever, llm)
     
     redis_cache=RedisCache()
     chat_history = []

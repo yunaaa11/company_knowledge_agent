@@ -16,7 +16,12 @@ class Nodes:
     def retrieve_node(self,state:AgentState):
         print("--- 正在执行深度检索 ---")
         query=state["rewrite_query"]
-        docs=self.reranker.retrieve(query)
+        # 兼容处理：优先使用 retrieve 方法，否则使用 invoke
+        if hasattr(self.reranker, "retrieve"):
+            docs = self.reranker.retrieve(query)
+        else:
+        # 假设是 retriever（如 EnsembleRetriever），调用 invoke 获取文档列表
+            docs = self.reranker.invoke(query)
         return {"documents":docs}
     
     def generate_node(self,state:AgentState):

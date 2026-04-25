@@ -1,0 +1,27 @@
+services:
+  # 服务1：你的 RAG 应用
+  rag-app:
+    build: .
+    command: python test/test_cache.py
+    volumes:
+      - .:/app  # 将本地代码映射到容器，修改代码不需要重新构建镜像
+    env_file:
+      - .env
+    # 也可以手动指定
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - HF_ENDPOINT=https://hf-mirror.com        # 使用镜像站
+      - NO_PROXY=localhost,127.0.0.1,redis-server,hf-mirror.com,*.hf-mirror.com
+    depends_on:
+      - redis-server
+    stdin_open: true # 允许交互式输入 (针对你的交互测试脚本)
+    tty: true
+
+  # 服务2：Redis 数据库
+  redis-server:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+    restart: always
