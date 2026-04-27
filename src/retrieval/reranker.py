@@ -19,7 +19,7 @@ class RerankProcessor:
          content_preview = doc.page_content[:200]
          return hashlib.md5(f"{source}_{content_preview}".encode("utf-8")).hexdigest()
     
-    def retrieve(self, query: str, threshold=0.1):
+    def retrieve(self, query: str):
         """
         检索、重排、去重，过滤掉分数低于阈值的文档
         """
@@ -45,30 +45,40 @@ class RerankProcessor:
                 if fingerprint not in seen:
                     seen.add(fingerprint)
                     unique_results.append(doc)
+            if not unique_results:
+                print("⚠️ 去重后结果为空，退回原始结果")
+                return results  # 至少保留重排后的结果
 
-             # 3. 阈值过滤：只保留重排分数 >= threshold 的文档
-            filtered_results = []
-            for doc in unique_results:
-                #重排后的分数通常存储在 metadata['relevance_score'] 中
-                # 获取分数，如果没有分数则默认为 0.0
-                score = doc.metadata.get("relevance_score", 0.0)
-                
-                if score >= threshold:
-                    filtered_results.append(doc)
-                else:
-                    source = doc.metadata.get('source', 'unknown')
-                    print(f"--- 过滤噪声文档 (分数: {score:.4f} < {threshold}): {doc.metadata.get('source')} ---")
-            
-            if not filtered_results:
-                print("⚠️ 阈值过滤后结果为空，退回未过滤结果")
-                return unique_results  # 至少保留去重后的结果
-            return filtered_results
-        
+             # 3. 动态裁剪逻辑：基于得分梯度（断层检测）
+            scores = [doc.metadata.get("relevance_score", 0.0) for doc in unique_results]
+
+            # 初始加入第一个最高分的文档
+            filtered_results=[unique_results[0]]
+            print(f"--- 原始召回: {len(unique_results)} 条 | 最高分: {scores[0]:.4f} ---")
+
+            for i in range(1,len(unique_results)):
+                current_score = scores[i] #i表示去重后的索引
+                prev_score=scores[i-1]
+                # 策略 A: 梯度截断（断层检测）
+                # 如果当前文档比前一个文档分数骤降超过 0.3，认为后面全是噪声
+                if(prev_score - current_score)>0.3:
+                    print(f"触发梯度截断：分差 {prev_score-current_score:.2f} ")
+                    break
+                # 策略 B: 保底阈值
+                # 即便没有明显断层，分数过低（如低于 0.15）也不予采用
+                if current_score<0.15:
+                    print(f"触发保底过滤：分数 {current_score:.4f} < 0.15")
+                    break
+                filtered_results.append(unique_results[i])
+            # 4. 返回最终结果，受 top_n 限制
+            final_docs=filtered_results[:self.top_n]
+            print(f"✅ 动态裁剪完成，最终保留: {len(final_docs)} 条")
+
+            for i,doc in enumerate(final_docs):
+                s=doc.metadata.get("relevance_score",0.0)
+                print(f"  [{i}] 分数: {s:.4f} | 来源: {doc.metadata.get('source')}")
+            return final_docs
         except Exception as e:
-            print(f"Rerank Error: {e}")
-            # 降级：直接返回基础混合检索器的原始结果（未重排、未去重、未过滤）
-            try:
-                raw_results = self.compression_retriever.base_retriever.invoke(query)
-                return raw_results[:self.top_n]
-            except:
-                return []
+            print(f"❌ Rerank 过程出错: {e}")
+            # 降级：如果出错，尝试返回未去重的原始检索结果
+            return []

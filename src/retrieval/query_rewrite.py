@@ -17,7 +17,8 @@ class QueryRewriter:
             "问题：{query}"
         )
 
-    def rewrite(self, query: str, chat_history: Optional[Union[str, List[dict]]] = None) -> str:
+    async def rewrite(self, query: str, chat_history: Optional[Union[str, List[dict]]] = None) -> str:
+        # 处理历史记录格式
         if isinstance(chat_history, list):
             history_str = "\n".join(
                 f"{msg.get('role', 'user')}: {msg.get('content', '')}" 
@@ -28,7 +29,11 @@ class QueryRewriter:
         else:
             history_str = ""
 
-        # 调用 LLM，传入正确的 history_str
-        chain = self.prompt | self.llm
-        response = chain.invoke({"query": query, "chat_history": history_str})
-        return response.content.strip()
+        # 调用 LLM
+        res=await self.llm.ainvoke(self.prompt.format(query=query,chat_history=history_str))
+        # 按行切分并清理
+        raw_queries=[q.strip() for q in res.content.split("\n") if q.strip()]
+        # 排除掉可能出现的“1. ”、“2. ”前缀
+        clean_queries=[q.split(".",1)[-1] if q[0].isdigit() else q for q in raw_queries]
+        # 确保包含原始查询，并取前 3 个
+        return clean_queries[:3]

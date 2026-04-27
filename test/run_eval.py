@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -12,7 +13,7 @@ from src.agent.workflow import create_graph
 from src.evaluation.test_data import TestDataGenerator
 from src.evaluation.ragas_metrics import RagasEvaluator
 from langchain_community.document_loaders import DirectoryLoader, UnstructuredFileLoader, UnstructuredWordDocumentLoader
-def  run_evaluation_pipeline():
+async def  run_evaluation_pipeline():
     # --- 1. 初始化组件 ---
     llm=ChatOpenAI(model=Config.LLM_MODEL, temperature=0)
     embeddings =HuggingFaceEmbeddings(model_name="BAAI/bge-small-zh-v1.5")
@@ -66,7 +67,7 @@ def  run_evaluation_pipeline():
         ground_truth=row['ground_truth']
         # 模拟 Agent 流程
         inputs = {"query": question, "chat_history": [], "loop_step": 0}
-        final_state = app.invoke(inputs)          # 直接获取最终状态（包含所有字段）
+        final_state = await app.ainvoke(inputs)          # 直接获取最终状态（包含所有字段）
         # 提取 answer 和 documents
         node_output = {
     "answer": final_state.get("answer", ""),
@@ -79,7 +80,7 @@ def  run_evaluation_pipeline():
     final_report=pd.concat(all_results)
     print("\n评估结果汇总:")
     print(final_report[['question', 'faithfulness', 'answer_relevancy', 'context_precision']])
-    final_report.to_csv("evaluation_report.csv", index=False)
-    print("\n评估报告已保存至 evaluation_report.csv")
+    final_report.to_csv("eval_report.csv", index=False)
+    print("\n评估报告已保存至 eval_report.csv")
 if __name__ == "__main__":
-    run_evaluation_pipeline() 
+    asyncio.run(run_evaluation_pipeline())

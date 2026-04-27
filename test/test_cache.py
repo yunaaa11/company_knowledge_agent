@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import os
 
@@ -13,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from src.cache.redis_client import RedisCache
 from config import Config
 
-def run_interactive_session():
+async def run_interactive_session():
     #初始化所有组件
     print("--- 正在初始化系统（加载向量库与混合检索） ---")
     llm=ChatOpenAI(model=Config.LLM_MODEL,temperature=0)
@@ -59,7 +60,7 @@ def run_interactive_session():
         final_answer=""
         last_node_data={}
         #流式输出节点过程
-        for output in app.stream(inputs):
+        async for output in app.astream(inputs):
             for key,value in output.items():
                 print(f"⚙️  进入节点: [{key}]")
                 last_node_data = value # 记录最后一个节点的数据
@@ -76,5 +77,5 @@ def run_interactive_session():
             else:
                 print("❌ 未能生成有效回答，请检查检索质量。")
 if __name__=="__main__":
-       run_interactive_session()
+       asyncio.run(run_interactive_session())
 

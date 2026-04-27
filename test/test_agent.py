@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import os
 
@@ -12,7 +13,7 @@ from src.retrieval.hybrid_search import HybridSearcher
 from langchain_openai import ChatOpenAI
 from config import Config
 
-def test_company_agent():
+async def test_company_agent():
     print("--- 正在初始化系统 ---")
     vm=VectorStoreManager()
     hs=HybridSearcher(vm)
@@ -38,7 +39,7 @@ def test_company_agent():
     print(f"\n用户问题: {inputs['query']}")
     print("-" * 30)
 
-    for output in app.stream(inputs):
+    async for output in app.astream(inputs):
         for key,value in output.items():
             print(f"\n进入节点: [{key}]")
             if "rewrite_query" in value:
@@ -51,4 +52,4 @@ def test_company_agent():
                 print(f"\n--- AI 最终回答 ---")
                 print(value["answer"])
 if __name__ == "__main__":
-    test_company_agent()
+     asyncio.run(test_company_agent())

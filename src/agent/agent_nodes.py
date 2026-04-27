@@ -10,19 +10,27 @@ class Nodes:
     async def rewrite_node(self,state:AgentState):
         print("--- 正在改写问题 ---")
         chat_history = state.get("chat_history")   # 从状态中获取历史
-        new_query=self.rewriter.rewrite(state["query"], chat_history=chat_history)
+        new_query=await self.rewriter.rewrite(state["query"], chat_history=chat_history)
         return {"rewrite_query": new_query, "loop_step": state.get("loop_step", 0) + 1}
     
     async def retrieve_node(self,state:AgentState):
         print("--- 正在执行深度检索 ---")
-        query=state["rewrite_query"]
+        queries=state["rewrite_query"]
+        if isinstance(queries, str):
+            queries = [queries]
+
+        all_docs = []
+        # 循环检索
+        for q in queries:
+            print(f"  🔍 正在检索子查询: {q}")
         # 兼容处理：优先使用 retrieve 方法，否则使用 invoke
-        if hasattr(self.reranker, "retrieve"):
-            docs = self.reranker.retrieve(query)
-        else:
-        # 假设是 retriever（如 EnsembleRetriever），调用 invoke 获取文档列表
-            docs = self.reranker.ainvoke(query)
-        return {"documents":docs}
+            if hasattr(self.reranker, "retrieve"):
+                docs = self.reranker.retrieve(q)
+            else:
+            # 假设是 retriever（如 EnsembleRetriever），调用 invoke 获取文档列表
+                docs = self.reranker.invoke(q)
+            all_docs.extend(docs)   
+        return {"documents":all_docs}
     
     async def generate_node(self,state:AgentState):
         print("--- 正在生成回答 ---")
