@@ -7,13 +7,13 @@ class Nodes:
         self.reranker=reranker
         self.llm = llm
 
-    def rewrite_node(self,state:AgentState):
+    async def rewrite_node(self,state:AgentState):
         print("--- 正在改写问题 ---")
         chat_history = state.get("chat_history")   # 从状态中获取历史
         new_query=self.rewriter.rewrite(state["query"], chat_history=chat_history)
         return {"rewrite_query": new_query, "loop_step": state.get("loop_step", 0) + 1}
     
-    def retrieve_node(self,state:AgentState):
+    async def retrieve_node(self,state:AgentState):
         print("--- 正在执行深度检索 ---")
         query=state["rewrite_query"]
         # 兼容处理：优先使用 retrieve 方法，否则使用 invoke
@@ -21,10 +21,10 @@ class Nodes:
             docs = self.reranker.retrieve(query)
         else:
         # 假设是 retriever（如 EnsembleRetriever），调用 invoke 获取文档列表
-            docs = self.reranker.invoke(query)
+            docs = self.reranker.ainvoke(query)
         return {"documents":docs}
     
-    def generate_node(self,state:AgentState):
+    async def generate_node(self,state:AgentState):
         print("--- 正在生成回答 ---")
         context="\n".join([d.page_content for d in state["documents"]])
         system_prompt = (
@@ -52,8 +52,5 @@ class Nodes:
     "5. 禁止给出超出制度范围的建议（如“可以申请更多年假”）。\n"
 )
         prompt = f"{system_prompt}\n\n根据资料：{context} 回答：{state['rewrite_query']}"
-        response = self.llm.invoke(prompt)
-        answer_text = response.content  # 提取纯文本内容
-        
-        return {"answer": answer_text}
-        
+        response = await self.llm.ainvoke(prompt) 
+        return {"answer": response.content}

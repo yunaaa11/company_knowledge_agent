@@ -14,6 +14,7 @@ class Config:
     cache_file= os.getenv("cache_file") 
     HF_TOKEN= os.getenv("HF_TOKEN")   
     HF_ENDPOINT= os.getenv("HF_ENDPOINT") 
+    HUGGINGFACEHUB_MODEL_NAME=os.getenv("HUGGINGFACEHUB_MODEL_NAME") 
     # Redis 配置
     REDIS_HOST = os.getenv("REDIS_HOST", "redis-server")
     REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))

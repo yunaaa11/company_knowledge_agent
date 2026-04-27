@@ -12,7 +12,7 @@ class VectorStoreManager:
         self.db_path = Config.db_path
         self.store_path = Config.store_path
         os.makedirs(store_path, exist_ok=True)
-        self.embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-zh-v1.5")
+        self.embeddings = HuggingFaceEmbeddings(model_name= Config.HUGGINGFACEHUB_MODEL_NAME)
         self.vectorstore = Chroma(
             collection_name="enterprise_paper",
             embedding_function=self.embeddings,

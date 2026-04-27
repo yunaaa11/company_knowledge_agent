@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -7,6 +9,7 @@ from src.retrieval.reranker import RerankProcessor
 from src.retrieval.hybrid_search import HybridSearcher
 from src.agent.workflow import create_graph
 from langchain_openai import ChatOpenAI
+from fastapi.responses import StreamingResponse
 from config import Config
 
 router=APIRouter()
@@ -32,23 +35,27 @@ class ChatResponse(BaseModel):
 #路由接口
 @router.post("/chat",response_model=ChatResponse)
 async def chat_endpoint(request:ChatRequest):
-    try:
+     # 1. 定义内部异步生成器
+    async def stream_generator():
         inputs={
             "query":request.query,
             "chat_history":request.chat_history,
             "loop_step":0
         }
-        result=await agent_app.ainvoke(inputs)
-        # 提取来源信息并去重
-        sources=list(set([
-            doc.metadata.get("source","未知来源")
-            for doc in result.get("documents",[])
-        ]))
-        return ChatResponse(
-            answer=result.get("answer","抱歉，我未能生成回答。"),
-            rewrite_query=result.get("rewrite_query", ""),
-            sources=sources
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
+        # 使用 astream_events 捕获 LLM 实时生成的 token
+        async for event in agent_app.astream_events(inputs,version="v1"):
+            kind=event["event"]
+            # 捕获改写后的问题（用于前端展示）
+            if kind=="on_chain_end" and event["name"]=="rewrite_node":
+                rewrite=event["data"]["output"]["rewrite_query"]
+                yield f"data:{json.dumps({'rewrite_query':rewrite})}\n\n"
+            # 捕获生成的 Token (核心流式输出)
+            if kind=="on_chat_model_stream" and event["metadata"].get("langgraph_node")=="generate":
+                content=event["data"]["chunk"].content
+                if content:
+                    yield f"data:{json.dumps({'answer_chunk':content}, ensure_ascii=False)}\n\n"
+            #捕获最终引用的来源
+            if kind=="on_chain_end" and event["name"]=="generate_node":
+                # 这里可以从 state 提取 documents 传给前端
+                yield f"data: [DONE]\n\n"
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
