@@ -21,7 +21,7 @@ async def test_mq():
     query="笔记本电脑坏了怎么修？"
     history=[{"role":"user","content":"我想领一个办公用品"}]
     # 1. 测试改写
-    queries = await rewriter.rewrite_multiple(query, chat_history=history)
+    queries = await rewriter.rewrite(query, chat_history=history)
     print(f"\n原始问题: {query}")
     print("生成的 3 个搜索策略:")
     for i,q in enumerate(queries):

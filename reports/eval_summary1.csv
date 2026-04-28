@@ -1,0 +1,2 @@
+﻿sample_count,avg_faithfulness,avg_answer_relevancy,avg_context_precision,avg_context_recall,avg_strict_score,avg_retrieval_count
+12,0.8601,,0.523,0.9583,,5.58

@@ -29,11 +29,11 @@ async def test_company_agent():
 
     app = create_graph(vm, reranker,llm)
     inputs = {
-    "query": "那鼠标呢？",
+    "query": "那工资怎么发？",
     "chat_history": [
-        {"role": "user", "content": "办公用品申领范围包括哪些？"},
-        {"role": "assistant", "content": "包括日常消耗品（笔、笔记本等）、耐用品（计算器、鼠标等）、打印耗材。"}
-    ],
+    {"role": "user", "content": "员工请病假需要提供什么材料？"},
+    {"role": "assistant", "content": "病假需提供医院开具的病假证明。"}
+],
     "loop_step": 0
 }
     print(f"\n用户问题: {inputs['query']}")

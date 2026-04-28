@@ -1,11 +1,14 @@
 from src.retrieval.query_rewrite import QueryRewriter
 from src.retrieval.reranker import RerankProcessor
 from src.agent.states import AgentState
+import os
+
 class Nodes:
     def __init__(self,vector_manager,reranker,llm):
         self.rewriter=QueryRewriter(llm=llm)
         self.reranker=reranker
         self.llm = llm
+        self.max_fused_docs = int(os.getenv("MAX_FUSED_DOCS", "6"))
 
     async def rewrite_node(self,state:AgentState):
         print("--- 正在改写问题 ---")
@@ -18,18 +21,44 @@ class Nodes:
         queries=state["rewrite_query"]
         if isinstance(queries, str):
             queries = [queries]
-
+        #引入了 seen_sources（集合）和 fingerprint（指纹）逻辑
         all_docs = []
-        # 循环检索
-        for q in queries:
-            print(f"  🔍 正在检索子查询: {q}")
+        seen_sources = set() #用于去重的集合，存储文档的指纹
+        subquery_stats = []  #记录每个子查询召回的原始文档数量（用于调试/日志）
+
+        # 循环检索 
+        for idx, q in enumerate(queries, start=1):
+            print(f"  🔍 子查询 {idx}: {q}")
         # 兼容处理：优先使用 retrieve 方法，否则使用 invoke
             if hasattr(self.reranker, "retrieve"):
                 docs = self.reranker.retrieve(q)
             else:
             # 假设是 retriever（如 EnsembleRetriever），调用 invoke 获取文档列表
                 docs = self.reranker.invoke(q)
-            all_docs.extend(docs)   
+            
+            #记录该子查询召回的文档数量
+            subquery_stats.append((q, len(docs)))
+            for doc in docs:
+                fingerprint = (
+                    doc.metadata.get("source", ""),
+                    doc.page_content[:200],
+                )
+                if fingerprint in seen_sources:
+                    continue
+                seen_sources.add(fingerprint)
+                all_docs.append(doc)
+        #去重后的文档按 relevance_score（相关度分数）降序排序
+        all_docs.sort(
+            key=lambda doc: doc.metadata.get("relevance_score", 0.0),
+            reverse=True
+        )
+        all_docs = all_docs[:self.max_fused_docs]
+        #去重排序后的文档列表存入状态中的 documents 字段
+        if subquery_stats:
+            print("  子查询召回摘要:")
+            for idx, (_, count) in enumerate(subquery_stats, start=1):
+                print(f"    - 子查询 {idx}: 保留 {count} 条")
+        print(f"  融合去重后最终文档数: {len(all_docs)}")
         return {"documents":all_docs}
     
     async def generate_node(self,state:AgentState):
@@ -58,6 +87,9 @@ class Nodes:
     "3. 回答应简洁、结构化，可使用分点或表格帮助理解。\n"
     "4. 对于涉及金额、天数、百分比等具体数字，务必核对准确。\n"
     "5. 禁止给出超出制度范围的建议（如“可以申请更多年假”）。\n"
+    "6. 如果问题包含多个子问题，必须逐项覆盖，不能漏答。\n"
+    "7. 若上下文中存在相互矛盾的信息，先说明冲突，再按优先级给出结论。\n"
+    "8. 只允许复述文档中明确出现的规则，禁止补充文档未出现的条件、阈值或例外。\n"
 )
         prompt = f"{system_prompt}\n\n根据资料：{context} 回答：{state['rewrite_query']}"
         response = await self.llm.ainvoke(prompt) 

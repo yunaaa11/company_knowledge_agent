@@ -26,3 +26,5 @@ logs/
 temp/
 
 evaluation_report.csv
+eval_report.csv
+reports/

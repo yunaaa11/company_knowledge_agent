@@ -6,6 +6,8 @@ import os
 class HybridSearcher:
     def __init__(self, vector_manager, bm25_path=Config.bm25_path):
         self.vector_retriever = vector_manager.get_parent_retriever()
+        if hasattr(self.vector_retriever, "search_kwargs"):
+            self.vector_retriever.search_kwargs = {"k": 12}
     
         # 加载 BM25 (注意添加路径检查)
         #bm25_path:保存 BM25 检索器的索引数据（倒排索引、文档长度等统计信息）
@@ -16,7 +18,7 @@ class HybridSearcher:
                 self.bm25_retriever = pickle.load(f)
                 print(f"✅ BM25 成功加载，索引内含文档数: {len(self.bm25_retriever.docs)}")
             # 设置每次检索返回的文档数量
-            self.bm25_retriever.k = 15
+            self.bm25_retriever.k = 12
         else:
                 print(f"⚠️ 警告: 未找到 BM25 索引文件 {Config.bm25_path}")
                 self.bm25_retriever = None

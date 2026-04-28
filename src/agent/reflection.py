@@ -1,6 +1,7 @@
 from src.agent.states import AgentState
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
+
 class Grade(BaseModel):
     binary_score:str=Field(description="文档是否相关，'yes' or 'no'")
 
@@ -12,14 +13,23 @@ class Reflection:
         决定是去 generate还是去 rewrite
         """
         print("--- 正在评估检索质量 ---")
-        docs = state["documents"]
+        docs = state.get("documents", [])
+        loop_step = state.get("loop_step", 0)
         
-        # 实际项目中这里通常再调一次轻量级 LLM 进行打分
-        # 简化逻辑：如果没有搜到文档，或者迭代次数 < 2，则重试
-        if not docs and state["loop_step"] <= 2:
+        # 至少需要检索到文档，且前两条中有一条具备基本相关性
+        if not docs and loop_step <= 2:
             return "retry"
-        else:
-            return "generate"
+
+        top_docs = docs[:2]
+        high_score_docs = [
+            doc for doc in top_docs
+            if doc.metadata.get("relevance_score", 0.0) >= 0.2
+        ]
+        if not high_score_docs and loop_step <= 2:
+            print("--- Top 文档相关性偏低，触发重试 ---")
+            return "retry"
+
+        return "generate"
     @staticmethod
     async def grade_documents_complex(state:AgentState,llm):
         """
