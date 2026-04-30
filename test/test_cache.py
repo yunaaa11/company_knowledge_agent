@@ -40,7 +40,12 @@ async def run_interactive_session():
         cache_hit=False
         if Config.ENABLE_CACHE:
             # 使用 query 生成唯一的缓存键
-            cache_key = redis_cache.generate_query_key(query)
+            cache_key = redis_cache.generate_query_key(
+                query=query,
+                index_version=Config.INDEX_VERSION,
+                prompt_version=Config.PROMPT_VERSION,
+                prefix=Config.CACHE_KEY_PREFIX,
+            )
             cached_res = redis_cache.get_cache(cache_key)
             #这里缓存的 last_node_data 是整个节点输出字典，但取回答时只用了 answer
             if cached_res:

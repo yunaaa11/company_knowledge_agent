@@ -1,0 +1,5 @@
+﻿variant,sample_count,avg_faithfulness,avg_answer_relevancy,avg_context_precision,avg_context_recall,avg_strict_score,avg_retrieval_count
+baseline(no_rewrite_no_rerank_no_reflection),12,0.8376,0.7422,0.3657,1.0,0.5847,6.0
+plus_rewrite,12,0.8418,0.751,0.3861,1.0,0.5913,6.0
+plus_rerank,12,0.8156,0.5638,0.5903,0.875,0.7619,5.08
+plus_reflection(full),12,0.8387,0.6091,0.5486,0.875,0.7657,5.08

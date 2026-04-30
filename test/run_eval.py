@@ -111,7 +111,7 @@ async def  run_evaluation_pipeline():
 
     # --- 3. 运行 Agent 并收集结果 ---
     print("--- 正在运行 Agent 获取回答 ---")
-    evaluator=RagasEvaluator(llm)
+    evaluator = RagasEvaluator(llm, embeddings=vm.embeddings)
     all_results=[]
     
     for idx, row in testset_df.iterrows():
@@ -138,7 +138,7 @@ async def  run_evaluation_pipeline():
     summary_df = pd.DataFrame([{
         "sample_count": len(final_report),
         "avg_faithfulness": round(final_report["faithfulness"].mean(), 4),
-        "avg_answer_relevancy": round(final_report["answer_relevancy"].mean(), 4),
+        "avg_answer_relevancy": round(pd.to_numeric(final_report["answer_relevancy"], errors="coerce").fillna(0).mean(), 4),
         "avg_context_precision": round(final_report["context_precision"].mean(), 4),
         "avg_context_recall": round(final_report["context_recall"].mean(), 4),
         "avg_strict_score": round(final_report["strict_score"].mean(), 4),
@@ -147,8 +147,8 @@ async def  run_evaluation_pipeline():
 
     report_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports")
     os.makedirs(report_dir, exist_ok=True)
-    report_path = os.path.join(report_dir, "eval_report2.csv")
-    summary_path = os.path.join(report_dir, "eval_summary2.csv")
+    report_path = os.path.join(report_dir, "eval_report.csv")
+    summary_path = os.path.join(report_dir, "eval_summary.csv")
 
     print("\n评估结果汇总:")
     print(final_report[[

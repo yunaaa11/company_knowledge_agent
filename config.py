@@ -20,4 +20,8 @@ class Config:
     REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
     REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or None
     # 缓存开关
-    ENABLE_CACHE = os.getenv("ENABLE_CACHE") 
+    ENABLE_CACHE = os.getenv("ENABLE_CACHE")
+    # 缓存版本：用于文档重建索引或提示词变更后自动失效旧缓存
+    INDEX_VERSION = os.getenv("INDEX_VERSION", "v1")
+    PROMPT_VERSION = os.getenv("PROMPT_VERSION", "v1")
+    CACHE_KEY_PREFIX = os.getenv("CACHE_KEY_PREFIX", "rag_cache")

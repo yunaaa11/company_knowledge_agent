@@ -26,6 +26,13 @@ class RedisCache:
             self.expire,
             json.dumps(value,ensure_ascii=False)
         )
-    def generate_query_key(self,query:str):
-        """用md5把query生成缓存"""
-        return f"rag_cache:{hashlib.md5(query.encode()).hexdigest()}"
+    def generate_query_key(
+        self,
+        query: str,
+        index_version: str = "v1",
+        prompt_version: str = "v1",
+        prefix: str = "rag_cache",
+    ):
+        """缓存键包含 query + 版本号，避免索引/提示词升级后命中过期缓存"""
+        raw = f"{query}|idx={index_version}|prompt={prompt_version}"
+        return f"{prefix}:{hashlib.md5(raw.encode()).hexdigest()}"

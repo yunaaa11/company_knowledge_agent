@@ -18,7 +18,7 @@ class Nodes:
     
     async def retrieve_node(self,state:AgentState):
         print("--- 正在执行深度检索 ---")
-        queries=state["rewrite_query"]
+        queries = state.get("rewrite_query") or state.get("query", "")
         if isinstance(queries, str):
             queries = [queries]
         #引入了 seen_sources（集合）和 fingerprint（指纹）逻辑
@@ -64,6 +64,9 @@ class Nodes:
     async def generate_node(self,state:AgentState):
         print("--- 正在生成回答 ---")
         context="\n".join([d.page_content for d in state["documents"]])
+        rewritten = state.get("rewrite_query") or state.get("query", "")
+        if isinstance(rewritten, list):
+            rewritten = " | ".join(rewritten)
         system_prompt = (
     "你是一个严谨的企业行政助手，负责回答员工关于公司制度的问题。\n"
     "请严格依据以下资料回答问题，不得编造或使用外部知识。\n\n"
@@ -91,6 +94,6 @@ class Nodes:
     "7. 若上下文中存在相互矛盾的信息，先说明冲突，再按优先级给出结论。\n"
     "8. 只允许复述文档中明确出现的规则，禁止补充文档未出现的条件、阈值或例外。\n"
 )
-        prompt = f"{system_prompt}\n\n根据资料：{context} 回答：{state['rewrite_query']}"
+        prompt = f"{system_prompt}\n\n根据资料：{context} 回答：{rewritten}"
         response = await self.llm.ainvoke(prompt) 
         return {"answer": response.content}

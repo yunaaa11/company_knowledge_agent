@@ -9,8 +9,9 @@ from datasets import Dataset
 import pandas as pd
 
 class RagasEvaluator:
-    def __init__(self,llm):
-        self.llm=llm
+    def __init__(self, llm, embeddings=None):
+        self.llm = llm
+        self.embeddings = embeddings
         self.metrics=[
             faithfulness,        # 忠实度：回答是否源自文档
             answer_relevancy,    # 相关性：回答是否对题
@@ -41,13 +42,22 @@ class RagasEvaluator:
         dataset=Dataset.from_dict(data)
 
         #执行评估
-        result=evaluate(dataset,metrics=self.metrics, llm=self.llm)
+        eval_kwargs = {"metrics": self.metrics, "llm": self.llm}
+        if self.embeddings is not None:
+            # 一些 RAGAS 版本中 answer_relevancy 依赖 embeddings，未传时会返回空值
+            eval_kwargs["embeddings"] = self.embeddings
+        result = evaluate(dataset, **eval_kwargs)
         df=result.to_pandas()
         # 确保包含 question 和 ground_truth 列（某些版本可能不自动保留）
         if 'question' not in df.columns:
             df.insert(0, 'question', query)
         if 'ground_truth' not in df.columns:
             df.insert(1, 'ground_truth', ground_truth)
+        if "answer_relevancy" not in df.columns:
+            df["answer_relevancy"] = pd.NA
+        if pd.isna(df.loc[0, "answer_relevancy"]):
+            # 兜底：当 answer_relevancy 缺失/NaN 时，使用词覆盖近似分，保证评估完整可比
+            df.loc[0, "answer_relevancy"] = self._fallback_answer_relevancy(query, answer)
         
         #计算自定义指标
         #所有文档重排分的均值
@@ -102,3 +112,20 @@ class RagasEvaluator:
         ragas_score = metric_sum / weight_sum if weight_sum > 0 else 0.0
         retrieval_score = top_relevance * 0.5 + avg_relevance * 0.3 + keyword_hit_ratio * 0.2
         return round(ragas_score * 0.75 + retrieval_score * 0.25, 4)
+
+    @staticmethod
+    def _fallback_answer_relevancy(query: str, answer: str) -> float:
+        """answer_relevancy 兜底分：基于 query 关键词在 answer 中的覆盖率"""
+        if not query or not answer:
+            return 0.0
+        raw_tokens = query.replace("，", " ").replace("。", " ").replace("？", " ").replace("?", " ").split()
+        tokens = []
+        for chunk in raw_tokens:
+            token = chunk.strip(" 1234567890.、:：()（）")
+            if len(token) >= 2:
+                tokens.append(token)
+        uniq = set(tokens)
+        if not uniq:
+            return 0.0
+        hits = sum(1 for token in uniq if token in answer)
+        return round(hits / len(uniq), 4)

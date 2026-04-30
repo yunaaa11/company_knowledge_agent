@@ -83,6 +83,11 @@ REDIS_PORT=6379
 
 HF_ENDPOINT=https://hf-mirror.com
 HF_TOKEN=
+
+# 缓存版本控制（索引或提示词更新后建议递增）
+INDEX_VERSION=v1
+PROMPT_VERSION=v1
+CACHE_KEY_PREFIX=rag_cache
 ```
 
 ### 3. 启动服务
@@ -184,7 +189,20 @@ python test/run_eval.py
 - 批量运行 Agent 获取回答
 - 对每条样本计算 RAGAS 和自定义指标
 - 输出整体均值和按类别分组统计
-- 生成 `reports/eval_report2.csv` 和 `reports/eval_summary2.csv`
+- 生成 `reports/eval_report.csv` 和 `reports/eval_summary.csv`
+
+### 运行 Ablation（4组最小对比）
+
+```bash
+python test/run_ablation.py
+```
+
+该脚本会自动跑 4 组配置并输出 `reports/ablation_summary.csv`：
+
+- `baseline(no_rewrite_no_rerank_no_reflection)`
+- `plus_rewrite`
+- `plus_rerank`
+- `plus_reflection(full)`
 
 ## 本项目做过的关键优化
 
@@ -256,6 +274,20 @@ docker exec -it bussiness-rag-app-1 python test/run_indexing.py
 - 引入来源引用展示，让前端直接看到答案对应的制度文档
 - 记录平均响应时间、缓存命中率等线上工程指标
 - 扩充评估集规模，并增加人工复核，避免只依赖自动指标
+
+## 缓存失效策略（上线建议）
+
+为避免“文档更新后仍命中旧答案”，缓存键建议包含版本号：
+
+- `query`
+- `index_version`（重建索引后递增）
+- `prompt_version`（系统提示词升级后递增）
+
+当前项目已支持该策略，对应环境变量：
+
+- `INDEX_VERSION`
+- `PROMPT_VERSION`
+- `CACHE_KEY_PREFIX`
 
 ## 许可证
 
