@@ -34,4 +34,4 @@ COPY . .
 EXPOSE 8000
 
 #8. 运行你的交互测试脚本
-CMD ["python", "test/test_cache.py"]
+CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

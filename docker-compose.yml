@@ -2,7 +2,9 @@ services:
   # 服务1：你的 RAG 应用
   rag-app:
     build: .
-    command: python test/test_cache.py
+    command: uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
     volumes:
       - .:/app  # 将本地代码映射到容器，修改代码不需要重新构建镜像
     env_file:

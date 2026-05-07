@@ -2,12 +2,15 @@
 myenv/
 env/
 venv/
+.venv/
 
 # 数据缓存与向量库
 data/processed/
 data/doc_cache.json
 data/doc_store
 vector_db/
+chroma_db/
+.flashrank/
 *.pkl
 *.parquet
 
@@ -15,7 +18,9 @@ vector_db/
 .vscode/
 .idea/
 __pycache__/
+**/__pycache__/
 *.pyc
+*.pyo
 
 # 环境变量
 .env
@@ -29,3 +34,5 @@ evaluation_report.csv
 eval_report.csv
 reports/eval_report1.csv
 reports/eval_summary1.csv
+reports/eval_report2.csv
+reports/eval_summary2.csv
