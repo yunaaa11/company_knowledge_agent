@@ -33,7 +33,7 @@ class Nodes:
             if hasattr(self.reranker, "retrieve"):
                 docs = self.reranker.retrieve(q)
             else:
-            # 假设是 retriever（如 EnsembleRetriever），调用 invoke 获取文档列表
+            # 假设是 retriever（如 EnsembleRetriever），调用 invoke 获取文档列表，完成多个步骤
                 docs = self.reranker.invoke(q)
             
             #记录该子查询召回的文档数量

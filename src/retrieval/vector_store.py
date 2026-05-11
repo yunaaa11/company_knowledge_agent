@@ -5,6 +5,7 @@ from langchain_classic.storage import LocalFileStore, create_kv_docstore
 from langchain_classic.retrievers import ParentDocumentRetriever
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import os
+# Hugging Face 客户端的网络和鉴权配置
 os.environ["HF_ENDPOINT"] = Config.HF_ENDPOINT
 os.environ["HF_TOKEN"] =Config.HF_TOKEN
 class VectorStoreManager:
@@ -12,6 +13,7 @@ class VectorStoreManager:
         self.db_path = Config.db_path
         self.store_path = Config.store_path
         os.makedirs(store_path, exist_ok=True)
+        #HuggingFaceEmbeddings 将文本转换为向量
         self.embeddings = HuggingFaceEmbeddings(model_name= Config.HUGGINGFACEHUB_MODEL_NAME)
         self.vectorstore = Chroma(
             collection_name="enterprise_paper",

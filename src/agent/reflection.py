@@ -9,14 +9,13 @@ class Reflection:
     @staticmethod
     def grade_documents(state:AgentState):
         """
-        这个函数作为条件边
-        决定是去 generate还是去 rewrite
+        简单规则：基于重排分数检查前2条文档是否 ≥0.2
         """
         print("--- 正在评估检索质量 ---")
         docs = state.get("documents", [])
         loop_step = state.get("loop_step", 0)
         
-        # 至少需要检索到文档，且前两条中有一条具备基本相关性
+         # 规则1：没有文档且重试次数 <= 2 → 重试
         if not docs and loop_step <= 2:
             return "retry"
 
@@ -25,16 +24,16 @@ class Reflection:
             doc for doc in top_docs
             if doc.metadata.get("relevance_score", 0.0) >= 0.2
         ]
+        # 规则2：前2条中没有任何一条得分 >= 0.2，且重试次数 <= 2 → 重试
         if not high_score_docs and loop_step <= 2:
             print("--- Top 文档相关性偏低，触发重试 ---")
             return "retry"
-
+        #其他（有高相关文档，或重试已达上限）
         return "generate"
     @staticmethod
     async def grade_documents_complex(state:AgentState,llm):
         """
-        复杂版质量评估：使用 LLM 对检索到的文档片段进行相关性打分，
-        根据相关率决定是否重试，同时考虑 loop_step 限制。
+        高级版：用 LLM 判断前5条文档的相关率 ≥0.4
         
         参数:
             state: AgentState 当前状态
@@ -46,7 +45,7 @@ class Reflection:
         print("--- 正在深度评估检索质量 ---")
         docs = state.get("documents", [])
         if not docs:
-            # 没有文档，直接判断是否可以重试
+            # 无文档且 loop_step <= 2 → retry，否则 generate
             loop_step = state.get("loop_step", 0)
             if loop_step <= 2:
                 print("--- 无文档且重试次数未达上限，触发重试 ---")
@@ -58,7 +57,7 @@ class Reflection:
         query = state.get("rewrite_query", state.get("query", ""))
         loop_step = state.get("loop_step", 0)
 
-        # 构造打分链
+        # 构造一个结构化输出链，返回 Grade (binary_score='yes'/'no')
         prompt=ChatPromptTemplate.from_template(
             "你是一个质检员。判断以下文档是否能回答用户问题：\n"
             "用户问题: {query}\n"

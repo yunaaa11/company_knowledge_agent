@@ -18,6 +18,7 @@ from run_eval import build_eval_dataset
 
 
 def _build_app(vm: VectorStoreManager, llm, use_rerank: bool, enable_rewrite: bool, enable_reflection: bool):
+    """根据参数动态构建一个完整的 RAG 工作流实例"""
     hs = HybridSearcher(vm)
     base_retriever = hs.get_ensemble_retriever()
     #根据 use_rerank 决定是否在检索后附加重排序器
@@ -30,7 +31,7 @@ def _build_app(vm: VectorStoreManager, llm, use_rerank: bool, enable_rewrite: bo
         enable_reflection=enable_reflection,
     )
 
-
+#对每个变体运行评估并计算平均指标
 async def _run_one_variant(
     name: str,
     vm: VectorStoreManager,
@@ -43,7 +44,8 @@ async def _run_one_variant(
     app = _build_app(vm, llm, use_rerank, enable_rewrite, enable_reflection)
     evaluator = RagasEvaluator(llm, embeddings=vm.embeddings)
     rows: List[pd.DataFrame] = []
-
+   
+   #遍历测试集的每一行（每个测试用例）
     for _, row in testset_df.iterrows():
         inputs = {
             "query": row["question"],

@@ -1,3 +1,4 @@
+#离线构建向量数据库（Chroma）和 BM25 索引
 import os
 import sys
 import pickle
@@ -39,7 +40,7 @@ def run_indexing():
             already_processed = cache.is_processed(file_path)
             try:
                 # 使用写的 DocumentParser，它能处理不同格式
-                docs = DocumentParser.parse(file_path)
+                docs = DocumentParser.parse(file_path) # 返回 List[Document]
                 all_docs_for_indexing.extend(docs)
                     
                 if not already_processed:
@@ -63,7 +64,7 @@ def run_indexing():
     if all_docs_for_indexing and (new_docs_to_vector_db or not bm25_exists):
         print(f"正在构建 BM25 索引 (文件总数: {len(all_docs_for_indexing)})...")
         
-        # BM25 需要先切分
+        # BM25 需要先切分并构建
         child_chunks = vm.child_splitter.split_documents(all_docs_for_indexing)
         bm25_retriever = BM25Retriever.from_documents(child_chunks)
         

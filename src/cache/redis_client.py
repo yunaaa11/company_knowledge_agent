@@ -1,8 +1,6 @@
 import hashlib
 import json
-
 import redis
-
 from config import Config
 
 
@@ -18,6 +16,13 @@ class RedisCache:
         self.expire = 3600
 
     def get_cache(self, key: str):
+        """
+        根据 key 获取缓存数据
+        参数:
+            key: 缓存键
+        返回:
+            dict | None: 反序列化后的 JSON 对象，若 key 不存在或发生异常则返回 None
+        """
         try:
             data = self.client.get(key)
             return json.loads(data) if data else None
@@ -26,6 +31,12 @@ class RedisCache:
             return None
 
     def set_cache(self, key: str, value: dict):
+        """
+        将数据存入 Redis 缓存，自动设置过期时间
+        参数:
+            key:   缓存键
+            value: 要缓存的字典对象（会序列化为 JSON 字符串）
+        """
         self.client.setex(
             key,
             self.expire,

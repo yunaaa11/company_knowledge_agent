@@ -91,12 +91,12 @@ class RerankProcessor:
             # 保底补全:保证至少保留 2 条高相关文档，避免召回过窄导致答案不完整
             if len(filtered_results) < 2:
                 for doc in unique_results[1:]:
-                    if doc in filtered_results:
-                        continue
+                    if doc in filtered_results:# 避免重复添加
+                        continue 
                     score = doc.metadata.get("relevance_score", 0.0)
-                    if score >= self.min_score * 0.8:
+                    if score >= self.min_score * 0.8: # 门槛从 min_score 放宽到 min_score * 0.8
                         filtered_results.append(doc)
-                    if len(filtered_results) >= min(2, len(unique_results)):
+                    if len(filtered_results) >= min(2, len(unique_results)):  # 一旦够 2 个，或者 unique_results 总数不足 2，就停止
                         break
                     
             # 返回最终结果，受 top_n 限制

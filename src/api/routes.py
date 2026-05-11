@@ -44,6 +44,7 @@ async def chat_endpoint(request: ChatRequest):
         # 缓存键生成与命中处理
         cache_key = None
         if redis_cache:
+            # 检查缓存 根据 query、历史、知识库版本等生成缓存键。
             cache_key = redis_cache.generate_query_key(
                 query=request.query,
                 chat_history=request.chat_history,
@@ -51,6 +52,7 @@ async def chat_endpoint(request: ChatRequest):
                 prompt_version=Config.PROMPT_VERSION,
                 prefix=Config.CACHE_KEY_PREFIX,
             )
+            #如果缓存命中，直接流式返回缓存的改写问句和完整答案，并标记 cache_hit: true，结束。
             cached_res = redis_cache.get_cache(cache_key)
             if cached_res:
                 rewrite = cached_res.get("rewrite_query")

@@ -40,7 +40,7 @@ class QueryRewriter:
                 continue
             if candidate[0].isdigit() and ". " in candidate[:4]:
                 candidate = candidate.split(". ", 1)[-1].strip()
-            if candidate and candidate not in variants:
+            if candidate and candidate not in variants:#确保候选非空且不与已有查询重复（避免原始查询和改写完全一样）
                 variants.append(candidate)
 
         return variants[:3]

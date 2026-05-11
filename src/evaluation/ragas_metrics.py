@@ -30,7 +30,7 @@ class RagasEvaluator:
         sources = [doc.metadata.get("source", "未知") for doc in documents]  # 来源文档名
         scores = [float(doc.metadata.get("relevance_score", 0.0)) for doc in documents]  # 重排后分数
         
-        #构建Ragas数据集格式
+        #提取数据并构建 RAGAS 数据集
         data={
             "question":[query],
             "answer":[answer],
@@ -48,6 +48,7 @@ class RagasEvaluator:
             eval_kwargs["embeddings"] = self.embeddings
         result = evaluate(dataset, **eval_kwargs)
         df=result.to_pandas()
+        
         # 确保包含 question 和 ground_truth 列（某些版本可能不自动保留）
         if 'question' not in df.columns:
             df.insert(0, 'question', query)
