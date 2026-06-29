@@ -27,3 +27,18 @@ services:
     ports:
       - "6379:6379"
     restart: always
+
+  streamlit-ui:
+    build: .
+    command: streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - API_BASE_URL=http://rag-app:8000
+    depends_on:
+      - rag-app
+

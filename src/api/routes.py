@@ -28,6 +28,27 @@ llm = ChatOpenAI(
 agent_app = create_graph(vm, reranker, llm)
 
 
+def serialize_documents(documents, limit: int = 6):
+    serialized = []
+    for rank, doc in enumerate(documents[:limit], start=1):
+        metadata = getattr(doc, "metadata", {}) or {}
+        snippet = " ".join((getattr(doc, "page_content", "") or "").split())[:300]
+        score = metadata.get("relevance_score", 0.0)
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            score = 0.0
+        serialized.append(
+            {
+                "rank": rank,
+                "source": metadata.get("source", "unknown"),
+                "relevance_score": score,
+                "snippet": snippet,
+            }
+        )
+    return serialized
+
+
 class ChatRequest(BaseModel):
     query: str = Field(..., example="北京的报销标准是多少？")
     chat_history: Optional[List[dict]] = Field(default_factory=list)
@@ -56,8 +77,11 @@ async def chat_endpoint(request: ChatRequest):
             cached_res = redis_cache.get_cache(cache_key)
             if cached_res:
                 rewrite = cached_res.get("rewrite_query")
+                cached_sources = cached_res.get("sources", [])
                 if rewrite:
                     yield f"data:{json.dumps({'rewrite_query': rewrite}, ensure_ascii=False)}\n\n"
+                if cached_sources:
+                    yield f"data:{json.dumps({'sources': cached_sources}, ensure_ascii=False)}\n\n"
                 #输出完整答案（一次性）
                 answer = cached_res.get("answer", "")
                 if answer:
@@ -69,34 +93,51 @@ async def chat_endpoint(request: ChatRequest):
         #缓存未命中：执行 LangGraph 并流式输出
         final_answer = ""
         final_rewrite = None
-        async for event in agent_app.astream_events(inputs, version="v1"):
-            kind = event["event"]
+        final_sources = []
+        try:
+            event_stream = agent_app.astream_events(inputs, version="v1")
+            async for event in event_stream:
+                kind = event["event"]
             
-            #查询改写完成
-            if kind == "on_chain_end" and event["name"] == "rewrite_node":
-                final_rewrite = event["data"]["output"]["rewrite_query"]
-                yield f"data:{json.dumps({'rewrite_query': final_rewrite}, ensure_ascii=False)}\n\n"
-            #生成节点的 token 流
-            if (
-                kind == "on_chat_model_stream"
-                and event["metadata"].get("langgraph_node") == "generate"
-            ):
-                content = event["data"]["chunk"].content
-                if content:
-                    final_answer += content
-                    yield f"data:{json.dumps({'answer_chunk': content}, ensure_ascii=False)}\n\n"
+                #查询改写完成
+                if kind == "on_chain_end" and event["name"] == "rewrite_node":
+                    final_rewrite = event["data"]["output"]["rewrite_query"]
+                    yield f"data:{json.dumps({'rewrite_query': final_rewrite}, ensure_ascii=False)}\n\n"
+                #生成节点的 token 流
+                if kind == "on_chain_end" and event["name"] == "retrieve_node":
+                    documents = event["data"].get("output", {}).get("documents", [])
+                    final_sources = serialize_documents(documents)
+                    if final_sources:
+                        yield f"data:{json.dumps({'sources': final_sources}, ensure_ascii=False)}\n\n"
+
+                if (
+                    kind == "on_chat_model_stream"
+                    and event["metadata"].get("langgraph_node") == "generate"
+                ):
+                    content = event["data"]["chunk"].content
+                    if content:
+                        final_answer += content
+                        yield f"data:{json.dumps({'answer_chunk': content}, ensure_ascii=False)}\n\n"
             
-            #生成节点结束 + 写入缓存
-            if kind == "on_chain_end" and event["name"] == "generate_node":
-                #缓存功能已开启；成功生成了有效的缓存键；得到了非空的答案
-                if redis_cache and cache_key and final_answer:
-                    redis_cache.set_cache(
-                        cache_key,
-                        {
-                            "answer": final_answer,
-                            "rewrite_query": final_rewrite,
-                        },
-                    )
-                yield "data: [DONE]\n\n"
+                #生成节点结束 + 写入缓存
+                if kind == "on_chain_end" and event["name"] == "generate_node":
+                    #缓存功能已开启；成功生成了有效的缓存键；得到了非空的答案
+                    if redis_cache and cache_key and final_answer:
+                        redis_cache.set_cache(
+                            cache_key,
+                            {
+                                "answer": final_answer,
+                                "rewrite_query": final_rewrite,
+                                "sources": final_sources,
+                            },
+                        )
+                    yield "data: [DONE]\n\n"
+
+        except Exception as exc:
+            error_text = str(exc)
+            if "Incorrect API key" in error_text or "invalid_api_key" in error_text or "401" in error_text:
+                error_text = "?????????OPENAI_API_KEY ??????????? OPENAI_BASE_URL ????? Key???? .env ??? FastAPI?"
+            yield f"data:{json.dumps({'error': error_text}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
