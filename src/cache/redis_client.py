@@ -13,7 +13,7 @@ class RedisCache:
             db=0,
             decode_responses=True,
         )
-        self.expire = 3600
+        self.expire = getattr(Config, "ANSWER_CACHE_TTL", 3600)
 
     def get_cache(self, key: str):
         """
@@ -56,3 +56,30 @@ class RedisCache:
         raw = f"{query}|history={history_text}|idx={index_version}|prompt={prompt_version}"
         #计算 MD5 并拼接前缀
         return f"{prefix}:{hashlib.md5(raw.encode()).hexdigest()}"
+
+    def get_json(self, key: str):
+        return self.get_cache(key)
+
+    def set_json(self, key: str, value: dict, expire: int | None = None):
+        ttl = expire or self.expire
+        try:
+            self.client.setex(
+                key,
+                ttl,
+                json.dumps(value, ensure_ascii=False),
+            )
+        except Exception as e:
+            print(f"Redis Error: {e}")
+
+    def generate_stage_key(
+        self,
+        stage: str,
+        query: str,
+        chat_history=None,
+        index_version: str = "v1",
+        prompt_version: str = "v1",
+        prefix: str = "rag_cache",
+    ):
+        history_text = json.dumps(chat_history or [], ensure_ascii=False, sort_keys=True)
+        raw = f"stage={stage}|query={query}|history={history_text}|idx={index_version}|prompt={prompt_version}"
+        return f"{prefix}:{stage}:{hashlib.md5(raw.encode()).hexdigest()}"

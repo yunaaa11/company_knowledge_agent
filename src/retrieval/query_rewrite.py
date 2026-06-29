@@ -2,10 +2,14 @@ from typing import List, Optional, Union
 
 from langchain_core.prompts import ChatPromptTemplate
 
+from config import Config
+from src.cache.redis_client import RedisCache
+
 class QueryRewriter:
     # 查询重写→ 独立、完整的搜索词
     def __init__(self,llm):
         self.llm = llm
+        self.cache = RedisCache() if Config.ENABLE_CACHE else None
         self.prompt = ChatPromptTemplate.from_template(
             "你是企业知识库的检索优化专家。请结合对话历史，为用户问题生成适合制度文档检索的查询变体。\n"
             "【改写要求】\n"
@@ -31,6 +35,20 @@ class QueryRewriter:
             history_str = ""
 
         # 调用 LLM
+        rewrite_cache_key = None
+        if self.cache:
+            rewrite_cache_key = self.cache.generate_stage_key(
+                stage="rewrite",
+                query=query,
+                chat_history=chat_history,
+                index_version=Config.INDEX_VERSION,
+                prompt_version=Config.PROMPT_VERSION,
+                prefix=Config.CACHE_KEY_PREFIX,
+            )
+            cached = self.cache.get_json(rewrite_cache_key)
+            if cached and cached.get("rewrite_query"):
+                return cached["rewrite_query"]
+
         res = await self.llm.ainvoke(self.prompt.format(query=query, chat_history=history_str))
 
         variants = [query.strip()]

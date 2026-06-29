@@ -24,6 +24,7 @@ def init_state() -> None:
     st.session_state.setdefault("last_rewrite", None)
     st.session_state.setdefault("last_sources", [])
     st.session_state.setdefault("last_cache_hit", False)
+    st.session_state.setdefault("last_retrieval_cache_hit", False)
     st.session_state.setdefault("last_latency", None)
 
 
@@ -167,7 +168,7 @@ def parse_sse_lines(lines: Iterable[str]) -> Iterable[Dict[str, Any]]:
 def stream_chat(query: str) -> Tuple[str, Dict[str, Any]]:
     payload = {"query": query, "chat_history": build_chat_history()}
     answer = ""
-    meta: Dict[str, Any] = {"rewrite_query": None, "sources": [], "cache_hit": False, "error": None}
+    meta: Dict[str, Any] = {"rewrite_query": None, "sources": [], "cache_hit": False, "retrieval_cache_hit": False, "error": None}
 
     with requests.post(CHAT_URL, json=payload, stream=True, timeout=120) as response:
         response.raise_for_status()
@@ -181,6 +182,8 @@ def stream_chat(query: str) -> Tuple[str, Dict[str, Any]]:
                 meta["sources"] = event["sources"]
             if "cache_hit" in event:
                 meta["cache_hit"] = bool(event["cache_hit"])
+            if "retrieval_cache_hit" in event:
+                meta["retrieval_cache_hit"] = bool(event["retrieval_cache_hit"])
             if "error" in event:
                 meta["error"] = event["error"]
                 answer = event["error"]
@@ -218,7 +221,7 @@ def render_sidebar(healthy: bool) -> None:
 
         col1, col2 = st.columns(2)
         col1.metric("\u8017\u65f6", f"{st.session_state.last_latency:.2f}s" if st.session_state.last_latency is not None else "-")
-        col2.metric("\u7f13\u5b58", "\u547d\u4e2d" if st.session_state.last_cache_hit else "\u672a\u547d\u4e2d")
+        col2.metric("\u7f13\u5b58", "\u547d\u4e2d" if (st.session_state.last_cache_hit or st.session_state.last_retrieval_cache_hit) else "\u672a\u547d\u4e2d")
 
         st.divider()
         st.subheader("\u793a\u4f8b\u95ee\u9898")
@@ -232,6 +235,7 @@ def render_sidebar(healthy: bool) -> None:
             st.session_state.last_rewrite = None
             st.session_state.last_sources = []
             st.session_state.last_cache_hit = False
+            st.session_state.last_retrieval_cache_hit = False
             st.session_state.last_latency = None
             st.rerun()
 
@@ -288,15 +292,19 @@ def render_debug_panel() -> None:
         for source in sources:
             score = source.get("relevance_score", 0)
             title = source.get("source") or "\u672a\u77e5\u6765\u6e90"
+            cache_label = "\u6765\u81ea\u7f13\u5b58" if source.get("from_cache") else "\u5b9e\u65f6\u68c0\u7d22"
             st.markdown(
                 f"""
                 <div class="source-card">
-                  <div class="source-title">{source.get('rank', '-')}. {title} - score={score:.4f}</div>
+                  <div class="source-title">#{source.get('rank', '-')} {title}</div>
+                  <div class="source-snippet">score={score:.4f} - {cache_label}</div>
                   <div class="source-snippet">{source.get('snippet', '')}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+            with st.expander("\u67e5\u770b\u5b8c\u6574\u7247\u6bb5", expanded=False):
+                st.write(source.get("page_content") or source.get("snippet", ""))
 
 
 def main() -> None:
@@ -336,6 +344,7 @@ def main() -> None:
         st.session_state.last_rewrite = meta.get("rewrite_query")
         st.session_state.last_sources = meta.get("sources", [])
         st.session_state.last_cache_hit = bool(meta.get("cache_hit"))
+        st.session_state.last_retrieval_cache_hit = bool(meta.get("retrieval_cache_hit"))
         st.rerun()
 
     render_debug_panel()

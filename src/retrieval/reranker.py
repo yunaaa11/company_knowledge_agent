@@ -1,14 +1,16 @@
 import hashlib
 import os
 
+from config import Config
+
 from langchain_classic.retrievers import ContextualCompressionRetriever
 from langchain_community.document_compressors import FlashrankRerank # 或使用 BGE 模型
 class RerankProcessor:
-    def __init__(self, base_retriever, top_n=8, min_score=0.2, score_drop_threshold=0.2, verbose=None, preview_limit=3):
+    def __init__(self, base_retriever, top_n=None, min_score=None, score_drop_threshold=None, verbose=None, preview_limit=3):
         # 1. 初始化压缩器 (Reranker)
-        self.top_n = top_n
-        self.min_score = min_score
-        self.score_drop_threshold = score_drop_threshold
+        self.top_n = top_n if top_n is not None else Config.RERANK_TOP_N
+        self.min_score = min_score if min_score is not None else Config.RERANK_MIN_SCORE
+        self.score_drop_threshold = score_drop_threshold if score_drop_threshold is not None else Config.RERANK_SCORE_DROP
         self.verbose = (
             os.getenv("RETRIEVAL_VERBOSE", "false").lower() == "true"
             if verbose is None else verbose

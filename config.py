@@ -2,6 +2,26 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+
+
+def _get_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+def _get_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
 def _get_bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -32,3 +52,15 @@ class Config:
     INDEX_VERSION = os.getenv("INDEX_VERSION", "v1")
     PROMPT_VERSION = os.getenv("PROMPT_VERSION", "v1")
     CACHE_KEY_PREFIX = os.getenv("CACHE_KEY_PREFIX", "rag_cache")
+    # Retrieval and rerank tuning
+    VECTOR_TOP_K = _get_int("VECTOR_TOP_K", 12)
+    BM25_TOP_K = _get_int("BM25_TOP_K", 12)
+    RERANK_TOP_N = _get_int("RERANK_TOP_N", 8)
+    RERANK_MIN_SCORE = _get_float("RERANK_MIN_SCORE", 0.2)
+    RERANK_SCORE_DROP = _get_float("RERANK_SCORE_DROP", 0.2)
+    MAX_FUSED_DOCS = _get_int("MAX_FUSED_DOCS", 6)
+
+    # Layered cache TTLs, in seconds
+    REWRITE_CACHE_TTL = _get_int("REWRITE_CACHE_TTL", 3600)
+    RETRIEVAL_CACHE_TTL = _get_int("RETRIEVAL_CACHE_TTL", 1800)
+    ANSWER_CACHE_TTL = _get_int("ANSWER_CACHE_TTL", 3600)

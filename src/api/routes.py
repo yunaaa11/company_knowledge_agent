@@ -32,7 +32,8 @@ def serialize_documents(documents, limit: int = 6):
     serialized = []
     for rank, doc in enumerate(documents[:limit], start=1):
         metadata = getattr(doc, "metadata", {}) or {}
-        snippet = " ".join((getattr(doc, "page_content", "") or "").split())[:300]
+        page_content = getattr(doc, "page_content", "") or ""
+        snippet = " ".join(page_content.split())[:300]
         score = metadata.get("relevance_score", 0.0)
         try:
             score = float(score)
@@ -44,6 +45,7 @@ def serialize_documents(documents, limit: int = 6):
                 "source": metadata.get("source", "unknown"),
                 "relevance_score": score,
                 "snippet": snippet,
+                "page_content": page_content,
             }
         )
     return serialized
@@ -78,10 +80,11 @@ async def chat_endpoint(request: ChatRequest):
             if cached_res:
                 rewrite = cached_res.get("rewrite_query")
                 cached_sources = cached_res.get("sources", [])
+                sources_from_cache = [{**item, "from_cache": True} for item in cached_sources]
                 if rewrite:
                     yield f"data:{json.dumps({'rewrite_query': rewrite}, ensure_ascii=False)}\n\n"
-                if cached_sources:
-                    yield f"data:{json.dumps({'sources': cached_sources}, ensure_ascii=False)}\n\n"
+                if sources_from_cache:
+                    yield f"data:{json.dumps({'sources': sources_from_cache, 'retrieval_cache_hit': True}, ensure_ascii=False)}\n\n"
                 #输出完整答案（一次性）
                 answer = cached_res.get("answer", "")
                 if answer:
@@ -98,17 +101,28 @@ async def chat_endpoint(request: ChatRequest):
             event_stream = agent_app.astream_events(inputs, version="v1")
             async for event in event_stream:
                 kind = event["event"]
-            
-                #查询改写完成
-                if kind == "on_chain_end" and event["name"] == "rewrite_node":
-                    final_rewrite = event["data"]["output"]["rewrite_query"]
-                    yield f"data:{json.dumps({'rewrite_query': final_rewrite}, ensure_ascii=False)}\n\n"
-                #生成节点的 token 流
-                if kind == "on_chain_end" and event["name"] == "retrieve_node":
-                    documents = event["data"].get("output", {}).get("documents", [])
-                    final_sources = serialize_documents(documents)
-                    if final_sources:
-                        yield f"data:{json.dumps({'sources': final_sources}, ensure_ascii=False)}\n\n"
+                name = event.get("name", "")
+                node = event.get("metadata", {}).get("langgraph_node", "")
+                output = event.get("data", {}).get("output", {})
+
+                if kind == "on_chain_end" and (name in {"rewrite_node", "rewrite"} or node == "rewrite"):
+                    if isinstance(output, dict) and output.get("rewrite_query"):
+                        final_rewrite = output["rewrite_query"]
+                        yield f"data:{json.dumps({'rewrite_query': final_rewrite}, ensure_ascii=False)}\n\n"
+
+                if kind == "on_chain_end" and (name in {"retrieve_node", "retrieve"} or node == "retrieve"):
+                    if isinstance(output, dict):
+                        if output.get("retrieval_sources"):
+                            final_sources = output["retrieval_sources"]
+                        else:
+                            final_sources = serialize_documents(output.get("documents", []))
+                        retrieval_cache_hit = bool(output.get("retrieval_cache_hit", False))
+                        if final_sources:
+                            final_sources = [
+                                {**item, "from_cache": retrieval_cache_hit}
+                                for item in final_sources
+                            ]
+                            yield f"data:{json.dumps({'sources': final_sources, 'retrieval_cache_hit': retrieval_cache_hit}, ensure_ascii=False)}\n\n"
 
                 if (
                     kind == "on_chat_model_stream"
@@ -118,25 +132,24 @@ async def chat_endpoint(request: ChatRequest):
                     if content:
                         final_answer += content
                         yield f"data:{json.dumps({'answer_chunk': content}, ensure_ascii=False)}\n\n"
-            
-                #生成节点结束 + 写入缓存
-                if kind == "on_chain_end" and event["name"] == "generate_node":
-                    #缓存功能已开启；成功生成了有效的缓存键；得到了非空的答案
+
+                if kind == "on_chain_end" and (name in {"generate_node", "generate"} or node == "generate"):
                     if redis_cache and cache_key and final_answer:
-                        redis_cache.set_cache(
+                        redis_cache.set_json(
                             cache_key,
                             {
                                 "answer": final_answer,
                                 "rewrite_query": final_rewrite,
                                 "sources": final_sources,
                             },
+                            expire=Config.ANSWER_CACHE_TTL,
                         )
                     yield "data: [DONE]\n\n"
 
         except Exception as exc:
             error_text = str(exc)
             if "Incorrect API key" in error_text or "invalid_api_key" in error_text or "401" in error_text:
-                error_text = "?????????OPENAI_API_KEY ??????????? OPENAI_BASE_URL ????? Key???? .env ??? FastAPI?"
+                error_text = "\u6a21\u578b\u670d\u52a1\u8ba4\u8bc1\u5931\u8d25\uff1aOPENAI_API_KEY \u65e0\u6548\u3001\u8fc7\u671f\uff0c\u6216\u4e0d\u662f\u5f53\u524d OPENAI_BASE_URL \u5bf9\u5e94\u5e73\u53f0\u7684 Key\u3002\u8bf7\u66f4\u65b0 .env \u540e\u91cd\u542f FastAPI\u3002"
             yield f"data:{json.dumps({'error': error_text}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
 

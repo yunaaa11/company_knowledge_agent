@@ -1,3 +1,9 @@
+import asyncio
+
+from langchain_core.documents import Document
+
+from config import Config
+from src.cache.redis_client import RedisCache
 from src.retrieval.query_rewrite import QueryRewriter
 from src.retrieval.reranker import RerankProcessor
 from src.agent.states import AgentState
@@ -8,59 +14,107 @@ class Nodes:
         self.rewriter=QueryRewriter(llm=llm)
         self.reranker=reranker
         self.llm = llm
-        self.max_fused_docs = int(os.getenv("MAX_FUSED_DOCS", "6"))
+        self.max_fused_docs = Config.MAX_FUSED_DOCS
+        self.cache = RedisCache() if Config.ENABLE_CACHE else None
+
+
+    @staticmethod
+    def _doc_to_cache(doc):
+        return {"page_content": doc.page_content, "metadata": dict(doc.metadata or {})}
+
+    @staticmethod
+    def _doc_from_cache(item):
+        return Document(page_content=item.get("page_content", ""), metadata=item.get("metadata", {}) or {})
+
+    @staticmethod
+    def _doc_source(doc, rank):
+        metadata = doc.metadata or {}
+        score = metadata.get("relevance_score", 0.0)
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            score = 0.0
+        return {
+            "rank": rank,
+            "source": metadata.get("source", "unknown"),
+            "relevance_score": score,
+            "snippet": " ".join((doc.page_content or "").split())[:300],
+            "page_content": doc.page_content,
+        }
+
+    def _retrieve_once(self, query):
+        if hasattr(self.reranker, "retrieve"):
+            return self.reranker.retrieve(query)
+        return self.reranker.invoke(query)
 
     async def rewrite_node(self,state:AgentState):
         print("--- 正在改写问题 ---")
         chat_history = state.get("chat_history")   # 从状态中获取历史
         new_query=await self.rewriter.rewrite(state["query"], chat_history=chat_history)
         return {"rewrite_query": new_query, "loop_step": state.get("loop_step", 0) + 1}
-    
+    #多查询并行检索 + 缓存 + 去重融合
     async def retrieve_node(self,state:AgentState):
-        print("--- 正在执行深度检索 ---")
+        print("--- retrieving documents ---")
+        #获取查询列表
         queries = state.get("rewrite_query") or state.get("query", "")
         if isinstance(queries, str):
             queries = [queries]
-        #引入了 seen_sources（集合）和 fingerprint（指纹）逻辑
+        #缓存检查
+        cache_key = None
+        if self.cache:
+            cache_key = self.cache.generate_stage_key(
+                stage="retrieval",
+                query=" | ".join(queries),
+                chat_history=state.get("chat_history"),
+                index_version=Config.INDEX_VERSION,
+                prompt_version=Config.PROMPT_VERSION,
+                prefix=Config.CACHE_KEY_PREFIX,
+            )
+            cached = self.cache.get_json(cache_key)
+            if cached and cached.get("documents"):
+                docs = [self._doc_from_cache(item) for item in cached["documents"]]
+                sources = [self._doc_source(doc, idx) for idx, doc in enumerate(docs, start=1)]
+                return {"documents": docs, "retrieval_sources": sources, "retrieval_cache_hit": True}
+        #并行检索
+        tasks = [asyncio.to_thread(self._retrieve_once, q) for q in queries]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+         #结果合并与去重
         all_docs = []
-        seen_sources = set() #用于去重的集合，存储文档的指纹
-        subquery_stats = []  #记录每个子查询召回的原始文档数量（用于调试/日志）
-
-        # 循环检索 
-        for idx, q in enumerate(queries, start=1):
-            print(f"  🔍 子查询 {idx}: {q}")
-        # 兼容处理：优先使用 retrieve 方法，否则使用 invoke
-            if hasattr(self.reranker, "retrieve"):
-                docs = self.reranker.retrieve(q)
+        seen_sources = set()
+        subquery_stats = []
+        for q, result in zip(queries, results):
+            if isinstance(result, Exception):
+                print(f"retrieval failed for query='{q}': {result}")
+                docs = []
             else:
-            # 假设是 retriever（如 EnsembleRetriever），调用 invoke 获取文档列表，完成多个步骤
-                docs = self.reranker.invoke(q)
-            
-            #记录该子查询召回的文档数量
+                docs = result or []
             subquery_stats.append((q, len(docs)))
             for doc in docs:
-                fingerprint = (
-                    doc.metadata.get("source", ""),
-                    doc.page_content[:200],
-                )
+                fingerprint = (doc.metadata.get("source", ""), doc.page_content[:200])
                 if fingerprint in seen_sources:
                     continue
                 seen_sources.add(fingerprint)
                 all_docs.append(doc)
-        #去重后的文档按 relevance_score（相关度分数）降序排序
-        all_docs.sort(
-            key=lambda doc: doc.metadata.get("relevance_score", 0.0),
-            reverse=True
-        )
+        #排序与截断
+        all_docs.sort(key=lambda doc: doc.metadata.get("relevance_score", 0.0), reverse=True)
         all_docs = all_docs[:self.max_fused_docs]
-        #去重排序后的文档列表存入状态中的 documents 字段
+        sources = [self._doc_source(doc, idx) for idx, doc in enumerate(all_docs, start=1)]
+        #写缓存
+        if self.cache and cache_key and all_docs:
+            self.cache.set_json(
+                cache_key,
+                {"documents": [self._doc_to_cache(doc) for doc in all_docs]},
+                expire=Config.RETRIEVAL_CACHE_TTL,
+            )
+
         if subquery_stats:
-            print("  子查询召回摘要:")
+            print("subquery retrieval summary:")
             for idx, (_, count) in enumerate(subquery_stats, start=1):
-                print(f"    - 子查询 {idx}: 保留 {count} 条")
-        print(f"  融合去重后最终文档数: {len(all_docs)}")
-        return {"documents":all_docs}
-    
+                print(f"  - query {idx}: {count} docs")
+        print(f"final fused docs: {len(all_docs)}")
+        #返回结果
+        return {"documents": all_docs, "retrieval_sources": sources, "retrieval_cache_hit": False}
+
     async def generate_node(self,state:AgentState):
         print("--- 正在生成回答 ---")
         context="\n".join([d.page_content for d in state["documents"]])

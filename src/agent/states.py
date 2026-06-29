@@ -5,6 +5,8 @@ class AgentState(TypedDict):
       rewrite_query:Union[str, List[str]]
       chat_history: List[dict]
       documents:list
+      retrieval_sources:list
+      retrieval_cache_hit: bool
       answer:str
       # 反思结果：是否需要重新检索 (True/False)
       needs_retry:bool
