@@ -61,4 +61,36 @@ class QueryRewriter:
             if candidate and candidate not in variants:#确保候选非空且不与已有查询重复（避免原始查询和改写完全一样）
                 variants.append(candidate)
 
-        return variants[:3]
+        variants = variants[:3]
+        if self.cache and rewrite_cache_key:
+            self.cache.set_json(rewrite_cache_key, {"rewrite_query": variants}, expire=Config.REWRITE_CACHE_TTL)
+        return variants
+
+    async def generate_hyde(self, query: str, chat_history=None) -> str:
+        """假设文档生成 扮演专家，直接生成一段针对该问题的“假设性完美答案”。这段生成的答案不直接回复用户，而是作为检索词去向量库中找语义相似的原文"""
+        if not Config.ENABLE_HYDE:
+            return ""
+        hyde_cache_key = None
+        if self.cache:
+            hyde_cache_key = self.cache.generate_stage_key(
+                stage="hyde",
+                query=query,
+                chat_history=chat_history,
+                index_version=Config.INDEX_VERSION,
+                prompt_version=Config.PROMPT_VERSION,
+                prefix=Config.CACHE_KEY_PREFIX,
+            )
+            cached = self.cache.get_json(hyde_cache_key)
+            if cached and cached.get("hyde"):
+                return cached["hyde"]
+
+        prompt = (
+            "???????????????????????????????????????"
+            "???????????????????????????????????\n"
+            f"?????{query}"
+        )
+        res = await self.llm.ainvoke(prompt)
+        hyde = res.content.strip()
+        if self.cache and hyde_cache_key:
+            self.cache.set_json(hyde_cache_key, {"hyde": hyde}, expire=Config.HYDE_CACHE_TTL)
+        return hyde

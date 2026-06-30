@@ -1,19 +1,28 @@
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 from config import Config
+
+DEFAULT_SEPARATORS = ["\n## ", "\n### ", "\n\n", "\n", "?", "?", ";", ".", " ", ""]
+
+
 class DocumentSplitter:
-    def __init__(self, chunk_size=1000, chunk_overlap=100):
-        # 父文档切分（较大，保留上下文）
+    def __init__(self):
         self.parent_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=Config.chunk_size,
-            chunk_overlap=Config.chunk_overlap,
-            separators=Config.separators
+            chunk_size=Config.PARENT_CHUNK_SIZE,
+            chunk_overlap=Config.PARENT_CHUNK_OVERLAP,
+            separators=DEFAULT_SEPARATORS,
         )
-        # 子文档切分（较小，用于向量检索定位）
         self.child_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=Config.chunk_size // 4,
-            chunk_overlap=Config.chunk_overlap // 2
+            chunk_size=Config.CHILD_CHUNK_SIZE,
+            chunk_overlap=Config.CHILD_CHUNK_OVERLAP,
+            separators=DEFAULT_SEPARATORS,
         )
 
-    def split(self, documents):
-        # 新的列表，其中每个元素是切分后的小 Document 块
+    def split_parent(self, documents):
         return self.parent_splitter.split_documents(documents)
+
+    def split_child(self, documents):
+        return self.child_splitter.split_documents(documents)
+
+    def split(self, documents):
+        return self.split_parent(documents)

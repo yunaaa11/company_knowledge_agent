@@ -51,20 +51,34 @@ class Nodes:
         print("--- 正在改写问题 ---")
         chat_history = state.get("chat_history")   # 从状态中获取历史
         new_query=await self.rewriter.rewrite(state["query"], chat_history=chat_history)
-        return {"rewrite_query": new_query, "loop_step": state.get("loop_step", 0) + 1}
-    #多查询并行检索 + 缓存 + 去重融合
+        hyde_query=await self.rewriter.generate_hyde(state["query"], chat_history=chat_history)
+        return {"rewrite_query": new_query, "hyde_query": hyde_query, "loop_step": state.get("loop_step", 0) + 1}
+    
     async def retrieve_node(self,state:AgentState):
+        """多查询并行检索 + 缓存 + 去重融合  加权多查询融合"""
         print("--- retrieving documents ---")
-        #获取查询列表
-        queries = state.get("rewrite_query") or state.get("query", "")
-        if isinstance(queries, str):
-            queries = [queries]
-        #缓存检查
+        rewrite_queries = state.get("rewrite_query") or state.get("query", "")
+        if isinstance(rewrite_queries, str):
+            rewrite_queries = [rewrite_queries]
+
+        queries = []
+        seen_query = set()
+        #区分三种查询来源：- original（原始问题）- rewrite（改写后问题）- hyde（HyDE 生成的假设文档）
+        def add_query(query, weight, kind):
+            if query and query not in seen_query:
+                queries.append({"query": query, "weight": weight, "kind": kind})
+                seen_query.add(query)
+       
+        add_query(state.get("query", ""), Config.ORIGINAL_QUERY_WEIGHT, "original")
+        for query in rewrite_queries:
+            add_query(query, Config.REWRITTEN_QUERY_WEIGHT, "rewrite")
+        add_query(state.get("hyde_query"), Config.HYDE_QUERY_WEIGHT, "hyde")
+
         cache_key = None
         if self.cache:
             cache_key = self.cache.generate_stage_key(
                 stage="retrieval",
-                query=" | ".join(queries),
+                query=" | ".join(item["query"] for item in queries),
                 chat_history=state.get("chat_history"),
                 index_version=Config.INDEX_VERSION,
                 prompt_version=Config.PROMPT_VERSION,
@@ -75,31 +89,47 @@ class Nodes:
                 docs = [self._doc_from_cache(item) for item in cached["documents"]]
                 sources = [self._doc_source(doc, idx) for idx, doc in enumerate(docs, start=1)]
                 return {"documents": docs, "retrieval_sources": sources, "retrieval_cache_hit": True}
-        #并行检索
-        tasks = [asyncio.to_thread(self._retrieve_once, q) for q in queries]
+
+        tasks = [asyncio.to_thread(self._retrieve_once, item["query"]) for item in queries]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-         #结果合并与去重
-        all_docs = []
-        seen_sources = set()
+
+        scored_docs = {}
         subquery_stats = []
-        for q, result in zip(queries, results):
+        for item, result in zip(queries, results):
+            query = item["query"]
+            weight = item["weight"]
+            kind = item["kind"]
             if isinstance(result, Exception):
-                print(f"retrieval failed for query='{q}': {result}")
+                print(f"retrieval failed for query='{query}': {result}")
                 docs = []
             else:
                 docs = result or []
-            subquery_stats.append((q, len(docs)))
+            subquery_stats.append((kind, query, len(docs)))
+            #按 fingerprint 去重，保留加权分数最高的文档（weighted_score 最大者）
+            #如果同一文档被多个查询召回，但得分不同（例如改写查询的权重更高），新版会保留加权后得分最高的版本，更符合多查询融合的常见策略。
             for doc in docs:
                 fingerprint = (doc.metadata.get("source", ""), doc.page_content[:200])
-                if fingerprint in seen_sources:
+                base_score = doc.metadata.get("relevance_score", 0.5) or 0.5
+                try:
+                    base_score = float(base_score)
+                except (TypeError, ValueError):
+                    base_score = 0.5
+                weighted_score = base_score * weight
+                if fingerprint in scored_docs and scored_docs[fingerprint].metadata.get("weighted_score", 0) >= weighted_score:
                     continue
-                seen_sources.add(fingerprint)
-                all_docs.append(doc)
-        #排序与截断
-        all_docs.sort(key=lambda doc: doc.metadata.get("relevance_score", 0.0), reverse=True)
+                doc.metadata["weighted_score"] = weighted_score
+                #kind 主要用于 日志追踪 和 元数据标记
+                doc.metadata["query_kind"] = kind
+                scored_docs[fingerprint] = doc
+
+        all_docs = list(scored_docs.values())
+        all_docs.sort(
+            key=lambda doc: doc.metadata.get("weighted_score", doc.metadata.get("relevance_score", 0.0)),
+            reverse=True,
+        )
         all_docs = all_docs[:self.max_fused_docs]
         sources = [self._doc_source(doc, idx) for idx, doc in enumerate(all_docs, start=1)]
-        #写缓存
+
         if self.cache and cache_key and all_docs:
             self.cache.set_json(
                 cache_key,
@@ -109,10 +139,9 @@ class Nodes:
 
         if subquery_stats:
             print("subquery retrieval summary:")
-            for idx, (_, count) in enumerate(subquery_stats, start=1):
-                print(f"  - query {idx}: {count} docs")
+            for idx, (kind, _, count) in enumerate(subquery_stats, start=1):
+                print(f"  - query {idx} ({kind}): {count} docs")
         print(f"final fused docs: {len(all_docs)}")
-        #返回结果
         return {"documents": all_docs, "retrieval_sources": sources, "retrieval_cache_hit": False}
 
     async def generate_node(self,state:AgentState):

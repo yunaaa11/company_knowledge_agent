@@ -3,6 +3,7 @@ from typing import List, TypedDict, Union
 class AgentState(TypedDict):
       query:str
       rewrite_query:Union[str, List[str]]
+      hyde_query:str
       chat_history: List[dict]
       documents:list
       retrieval_sources:list

@@ -1,82 +1,82 @@
-#离线构建向量数据库（Chroma）和 BM25 索引
 import os
-import sys
 import pickle
-# 获取当前脚本的绝对路径
+import shutil
+import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# 获取项目的根目录 (即 test 的上一级)
 root_dir = os.path.dirname(current_dir)
-# 将根目录添加到 Python 搜索路径
 if root_dir not in sys.path:
     sys.path.append(root_dir)
-from src.retrieval.vector_store import VectorStoreManager
-from src.document.doc_loader import DocumentParser
-from src.document.cache import DocCacheManager 
-from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_community.retrievers import BM25Retriever
 from config import Config
+from src.document.doc_loader import DocumentParser
+from src.document.metadata import prepare_documents_for_indexing
+from src.retrieval.vector_store import VectorStoreManager
+SUPPORTED_EXTS = (".md", ".txt", ".pdf", ".docx")
 
-def run_indexing():
-    # 1. 初始化组件
-    vm = VectorStoreManager()
-    # 按照你的结构，这里应该调用你定义的 ParentDocumentRetriever
-    parent_retriever = vm.get_parent_retriever() 
-    cache = DocCacheManager()
-    raw_data_path = "data/raw/"
-    
-    # 状态标记
-    bm25_exists = os.path.exists(Config.bm25_path)
-    new_docs_to_vector_db = []        # 只存放需要新添加到向量库的文档（未处理过的文件）
-    all_docs_for_indexing = []      # 用于构建 BM25 的全量文档
-    
-    # 手动遍历文件夹，调用你的解析器
-    print(f"正在从 {raw_data_path} 加载并解析文档...")
-    for root, dirs, files in os.walk(raw_data_path):
+#把磁盘上的原始文档（PDF/Markdown/Word）加工、切分、向量化，并分别存入向量库（Chroma）和关键词检索库（BM25），为后续的在线检索提供数据底座。
+
+def reset_index_storage():
+    """删除 Chroma 持久化目录、Docstore 文件存储、BM25 序列化文件、缓存文件"""
+    for path in [Config.db_path, Config.store_path]:
+        if path and os.path.exists(path):
+            shutil.rmtree(path)
+    if Config.bm25_path and os.path.exists(Config.bm25_path):
+        os.remove(Config.bm25_path)
+    if Config.cache_file and os.path.exists(Config.cache_file):
+        os.remove(Config.cache_file)
+
+
+def load_documents(raw_data_path="data/raw"):
+    """加载与解析文档 单个文件解析失败不会中断整个流程"""
+    all_docs = []
+    for root, _, files in os.walk(raw_data_path):
         for file in files:
-            if not file.endswith(('.md', '.txt', '.pdf', '.docx')):
+            if not file.lower().endswith(SUPPORTED_EXTS):
                 continue
             file_path = os.path.join(root, file)
-            file_hash = cache.get_file_hash(file_path)
-            already_processed = cache.is_processed(file_path)
             try:
-                # 使用写的 DocumentParser，它能处理不同格式
-                docs = DocumentParser.parse(file_path) # 返回 List[Document]
-                all_docs_for_indexing.extend(docs)
-                    
-                if not already_processed:
-                        new_docs_to_vector_db.extend(docs)
-                        cache.update_cache(file_hash)     # 记录已处理
-                        print(f"✅新增/修改文件已加载: {file}")
-                else:
-                        print(f"跳过已处理文件（内容未变）: {file}")
-            except Exception as e:
-                        print(f"❌解析失败 {file}: {e}")
+                docs = DocumentParser.parse(file_path)
+                prepared = prepare_documents_for_indexing(docs)
+                all_docs.extend(prepared)
+                print(f"loaded {file_path}: {len(prepared)} section docs")
+            except Exception as exc:
+                print(f"failed to parse {file_path}: {exc}")
+    return all_docs
 
-    # 3. 核心修复逻辑：写入向量库 (Chroma)
-    if new_docs_to_vector_db:
-        print(f"正在将 {len(new_docs_to_vector_db)} 个新文档存入向量库...")
-        parent_retriever.add_documents(new_docs_to_vector_db)
-    else:
-        print("💡 向量库无需更新。")
 
-    # 4. 核心修复逻辑：重建 BM25 索引
-    # 触发条件：有新文档 OR 索引文件丢失
-    if all_docs_for_indexing and (new_docs_to_vector_db or not bm25_exists):
-        print(f"正在构建 BM25 索引 (文件总数: {len(all_docs_for_indexing)})...")
-        
-        # BM25 需要先切分并构建
-        child_chunks = vm.child_splitter.split_documents(all_docs_for_indexing)
-        bm25_retriever = BM25Retriever.from_documents(child_chunks)
-        
-        # 确保目录存在并保存
-        os.makedirs(os.path.dirname(Config.bm25_path), exist_ok=True)
-        with open(Config.bm25_path, "wb") as f:
-            pickle.dump(bm25_retriever, f)
-        print(f"✅ BM25 索引已成功保存至: {Config.bm25_path}")
-    elif not all_docs_for_indexing:
-        print("❌ 错误：未发现任何有效文档。")
-    else:
-        print("💡 BM25 索引文件已存在且无新文档，跳过重建。")
+def run_indexing(force_rebuild=True):
+    #重建 保证数据一致性与可复现性
+    if force_rebuild:
+        reset_index_storage()
+
+    documents = load_documents("data/raw")
+    if not documents:
+        print("No valid documents found.")
+        return
+
+    vm = VectorStoreManager()
+    parent_retriever = vm.get_parent_retriever()
+
+    print(f"adding {len(documents)} enriched parent documents to Chroma parent retriever...")
+    parent_retriever.add_documents(documents)
+    #保证 BM25 的索引粒度与 Chroma 的索引粒度完全一致
+    child_chunks = vm.child_splitter.split_documents(documents)
+    print(f"building BM25 index with {len(child_chunks)} child chunks...")
+    # BM25 要用子块 保证了 BM25 的“高分辨率”匹配能力
+    bm25_retriever = BM25Retriever.from_documents(child_chunks)
+    bm25_retriever.k = Config.BM25_TOP_K
+
+    os.makedirs(os.path.dirname(Config.bm25_path), exist_ok=True)
+    with open(Config.bm25_path, "wb") as f:
+        pickle.dump(bm25_retriever, f)
+
+    print("index rebuild complete")
+    print(f"Chroma path: {Config.db_path}")
+    print(f"Docstore path: {Config.store_path}")
+    print(f"BM25 path: {Config.bm25_path}")
+    print(f"Parent chunk: {Config.PARENT_CHUNK_SIZE}/{Config.PARENT_CHUNK_OVERLAP}")
+    print(f"Child chunk: {Config.CHILD_CHUNK_SIZE}/{Config.CHILD_CHUNK_OVERLAP}")
+
 
 if __name__ == "__main__":
-    run_indexing()
+    run_indexing(force_rebuild=True)

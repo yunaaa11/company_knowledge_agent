@@ -1,41 +1,51 @@
+import os
+
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from config import Config
-from langchain_classic.storage import LocalFileStore, create_kv_docstore
 from langchain_classic.retrievers import ParentDocumentRetriever
+from langchain_classic.storage import LocalFileStore, create_kv_docstore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import os
-# Hugging Face 客户端的网络和鉴权配置
-os.environ["HF_ENDPOINT"] = Config.HF_ENDPOINT
-os.environ["HF_TOKEN"] =Config.HF_TOKEN
+
+from config import Config
+
+os.environ["HF_ENDPOINT"] = Config.HF_ENDPOINT or ""
+os.environ["HF_TOKEN"] = Config.HF_TOKEN or ""
+
+SEPARATORS = ["\n## ", "\n### ", "\n\n", "\n", "?", "?", ";", ".", " ", ""]
+
+
 class VectorStoreManager:
     def __init__(self, db_path=Config.db_path, store_path=Config.store_path):
-        self.db_path = Config.db_path
-        self.store_path = Config.store_path
-        os.makedirs(store_path, exist_ok=True)
-        #HuggingFaceEmbeddings 将文本转换为向量
-        self.embeddings = HuggingFaceEmbeddings(model_name= Config.HUGGINGFACEHUB_MODEL_NAME)
+        self.db_path = db_path or Config.db_path
+        self.store_path = store_path or Config.store_path
+        os.makedirs(self.store_path, exist_ok=True)
+        #向量库初始化
+        self.embeddings = HuggingFaceEmbeddings(model_name=Config.HUGGINGFACEHUB_MODEL_NAME)
         self.vectorstore = Chroma(
             collection_name="enterprise_paper",
             embedding_function=self.embeddings,
-            persist_directory=db_path
+            persist_directory=self.db_path,
         )
-         # 1. 原始文件存储（bytes级别）
-        raw_fs = LocalFileStore(store_path)
-        # 2. 包装成符合 Docstore 接口的对象
+        #文档存储抽象
+        raw_fs = LocalFileStore(self.store_path)
         self.docstore = create_kv_docstore(raw_fs)
-
+       #父子分割器配置
+        self.parent_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=Config.PARENT_CHUNK_SIZE,
+            chunk_overlap=Config.PARENT_CHUNK_OVERLAP,
+            separators=SEPARATORS,
+        )
         self.child_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=Config.chunk_size, 
-            chunk_overlap=Config.chunk_overlap
+            chunk_size=Config.CHILD_CHUNK_SIZE,
+            chunk_overlap=Config.CHILD_CHUNK_OVERLAP,
+            separators=SEPARATORS,
         )
 
     def get_parent_retriever(self):
-        """
-        检索器:用小查大、自动反向查找父文档
-        """
+        """返回父检索器"""
         return ParentDocumentRetriever(
             vectorstore=self.vectorstore,
             docstore=self.docstore,
+            parent_splitter=self.parent_splitter,
             child_splitter=self.child_splitter,
-        ) 
+        )

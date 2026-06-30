@@ -64,3 +64,17 @@ class Config:
     REWRITE_CACHE_TTL = _get_int("REWRITE_CACHE_TTL", 3600)
     RETRIEVAL_CACHE_TTL = _get_int("RETRIEVAL_CACHE_TTL", 1800)
     ANSWER_CACHE_TTL = _get_int("ANSWER_CACHE_TTL", 3600)
+
+# Parent-child chunking. Parent chunks feed the LLM; child chunks improve precise retrieval.
+Config.PARENT_CHUNK_SIZE = _get_int("PARENT_CHUNK_SIZE", 1000)
+Config.PARENT_CHUNK_OVERLAP = _get_int("PARENT_CHUNK_OVERLAP", 120)
+Config.CHILD_CHUNK_SIZE = _get_int("CHILD_CHUNK_SIZE", 300)
+Config.CHILD_CHUNK_OVERLAP = _get_int("CHILD_CHUNK_OVERLAP", 60)
+
+# Retrieval quality features
+Config.ENABLE_INTENT_FILTER = _get_bool("ENABLE_INTENT_FILTER", True)
+Config.ENABLE_HYDE = _get_bool("ENABLE_HYDE", True)
+Config.HYDE_CACHE_TTL = _get_int("HYDE_CACHE_TTL", 3600)
+Config.ORIGINAL_QUERY_WEIGHT = _get_float("ORIGINAL_QUERY_WEIGHT", 1.25)
+Config.REWRITTEN_QUERY_WEIGHT = _get_float("REWRITTEN_QUERY_WEIGHT", 1.0)
+Config.HYDE_QUERY_WEIGHT = _get_float("HYDE_QUERY_WEIGHT", 0.75)
