@@ -1,0 +1,2 @@
+﻿category,sample_count,avg_strict_score,expected_policy_hit_rate,top3_source_hit_rate,intent_accuracy,retrieval_cache_hit_rate,avg_latency_seconds
+single_fact,4,0.0,1.0,1.0,1.0,1.0,4.515

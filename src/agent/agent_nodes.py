@@ -6,6 +6,7 @@ from config import Config
 from src.cache.redis_client import RedisCache
 from src.retrieval.query_rewrite import QueryRewriter
 from src.retrieval.reranker import RerankProcessor
+from src.retrieval.intent import classify_query_intent
 from src.agent.states import AgentState
 import os
 
@@ -42,18 +43,31 @@ class Nodes:
             "page_content": doc.page_content,
         }
 
-    def _retrieve_once(self, query):
+    def _retrieve_once(self, query, prev_intent=None):
         if hasattr(self.reranker, "retrieve"):
-            return self.reranker.retrieve(query)
+            return self.reranker.retrieve(query, prev_intent=prev_intent)
         return self.reranker.invoke(query)
 
     async def rewrite_node(self,state:AgentState):
         print("--- 正在改写问题 ---")
         chat_history = state.get("chat_history")   # 从状态中获取历史
-        new_query=await self.rewriter.rewrite(state["query"], chat_history=chat_history)
-        hyde_query=await self.rewriter.generate_hyde(state["query"], chat_history=chat_history)
-        return {"rewrite_query": new_query, "hyde_query": hyde_query, "loop_step": state.get("loop_step", 0) + 1}
-    
+        rewrite_task = self.rewriter.rewrite(state["query"], chat_history=chat_history)
+        hyde_task = self.rewriter.generate_hyde(state["query"], chat_history=chat_history)
+        new_query, hyde_query = await asyncio.gather(rewrite_task, hyde_task)
+        # 检测当前问题的意图并保存为 prev_intent
+        detected_intent = classify_query_intent(
+            state["query"],
+            chat_history=chat_history,
+            prev_intent=state.get("prev_intent"),
+        )
+        print(f"--- 当前意图: {detected_intent} | 上一轮意图: {state.get('prev_intent')} ---")
+        return {
+            "rewrite_query": new_query,
+            "hyde_query": hyde_query,
+            "loop_step": state.get("loop_step", 0) + 1,
+            "prev_intent": detected_intent or state.get("prev_intent"),
+        }
+
     async def retrieve_node(self,state:AgentState):
         """多查询并行检索 + 缓存 + 去重融合  加权多查询融合"""
         print("--- retrieving documents ---")
@@ -68,12 +82,15 @@ class Nodes:
             if query and query not in seen_query:
                 queries.append({"query": query, "weight": weight, "kind": kind})
                 seen_query.add(query)
-       
+
         add_query(state.get("query", ""), Config.ORIGINAL_QUERY_WEIGHT, "original")
         for query in rewrite_queries:
             add_query(query, Config.REWRITTEN_QUERY_WEIGHT, "rewrite")
-        add_query(state.get("hyde_query"), Config.HYDE_QUERY_WEIGHT, "hyde")
+        if Config.ENABLE_HYDE:
+            add_query(state.get("hyde_query"), Config.HYDE_QUERY_WEIGHT, "hyde")
 
+        # 跨文档联合检索：如果当前意图涉及跨文档场景，自动并行检索多个 policy type
+        prev_intent = state.get("prev_intent")
         cache_key = None
         if self.cache:
             cache_key = self.cache.generate_stage_key(
@@ -85,12 +102,19 @@ class Nodes:
                 prefix=Config.CACHE_KEY_PREFIX,
             )
             cached = self.cache.get_json(cache_key)
+            #缓存命中分支
             if cached and cached.get("documents"):
                 docs = [self._doc_from_cache(item) for item in cached["documents"]]
                 sources = [self._doc_source(doc, idx) for idx, doc in enumerate(docs, start=1)]
-                return {"documents": docs, "retrieval_sources": sources, "retrieval_cache_hit": True}
+                cached_stats = cached.get("retrieval_query_stats", {})
+                return {
+                    "documents": docs,
+                    "retrieval_sources": sources,
+                    "retrieval_cache_hit": True,
+                    "retrieval_query_stats": cached_stats,
+                }
 
-        tasks = [asyncio.to_thread(self._retrieve_once, item["query"]) for item in queries]
+        tasks = [asyncio.to_thread(self._retrieve_once, item["query"], prev_intent) for item in queries]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         scored_docs = {}
@@ -121,19 +145,32 @@ class Nodes:
                 #kind 主要用于 日志追踪 和 元数据标记
                 doc.metadata["query_kind"] = kind
                 scored_docs[fingerprint] = doc
-
+        #缓存未命中分支
         all_docs = list(scored_docs.values())
         all_docs.sort(
             key=lambda doc: doc.metadata.get("weighted_score", doc.metadata.get("relevance_score", 0.0)),
             reverse=True,
         )
+        #截断、构建来源、统计、缓存存储和日志打印
         all_docs = all_docs[:self.max_fused_docs]
         sources = [self._doc_source(doc, idx) for idx, doc in enumerate(all_docs, start=1)]
+        retrieval_query_stats = {
+            "raw": [
+                {"kind": kind, "query": query, "count": count}
+                for kind, query, count in subquery_stats
+            ],
+            "counts_by_kind": {},
+        }
+        for kind, _, count in subquery_stats:
+            retrieval_query_stats["counts_by_kind"][kind] = retrieval_query_stats["counts_by_kind"].get(kind, 0) + count
 
         if self.cache and cache_key and all_docs:
             self.cache.set_json(
                 cache_key,
-                {"documents": [self._doc_to_cache(doc) for doc in all_docs]},
+                {
+                    "documents": [self._doc_to_cache(doc) for doc in all_docs],
+                    "retrieval_query_stats": retrieval_query_stats,
+                },
                 expire=Config.RETRIEVAL_CACHE_TTL,
             )
 
@@ -142,7 +179,12 @@ class Nodes:
             for idx, (kind, _, count) in enumerate(subquery_stats, start=1):
                 print(f"  - query {idx} ({kind}): {count} docs")
         print(f"final fused docs: {len(all_docs)}")
-        return {"documents": all_docs, "retrieval_sources": sources, "retrieval_cache_hit": False}
+        return {
+            "documents": all_docs,
+            "retrieval_sources": sources,
+            "retrieval_cache_hit": False,
+            "retrieval_query_stats": retrieval_query_stats,
+        }
 
     async def generate_node(self,state:AgentState):
         print("--- 正在生成回答 ---")
@@ -167,16 +209,28 @@ class Nodes:
     "- 第三优先级：财务部（报销）、行政部（办公用品）\n"
     "- 最低优先级：IT部操作指南（仅作参考，不与其他部门强制性规则冲突）\n"
     "若无法判断优先级，请如实列出不同规定，并提示用户以最新发布的正式制度为准。\n\n"
-    "【回答要求】\n"
+    "【回答要求 — 严格遵循】\n"
     "1. 引用具体条款时，注明来源文档名称（例如：根据《员工请假管理制度》第四条）。\n"
-    "2. 如果检索到的资料不足以回答问题，请明确说“资料中未找到相关信息”。\n"
-    "3. 回答应简洁、结构化，可使用分点或表格帮助理解。\n"
-    "4. 对于涉及金额、天数、百分比等具体数字，务必核对准确。\n"
-    "5. 禁止给出超出制度范围的建议（如“可以申请更多年假”）。\n"
-    "6. 如果问题包含多个子问题，必须逐项覆盖，不能漏答。\n"
-    "7. 若上下文中存在相互矛盾的信息，先说明冲突，再按优先级给出结论。\n"
-    "8. 只允许复述文档中明确出现的规则，禁止补充文档未出现的条件、阈值或例外。\n"
+    "2. 禁止添加任何常识、推测或外部知识。你的回答必须严格基于上方【资料】原文。\n"
+    "3. 如果检索到的资料不足以回答问题，请明确说\"资料中未找到相关信息\"，不要尝试补充。\n"
+    "4. 回答应简洁、结构化，可使用分点或表格帮助理解。\n"
+    "5. 对于涉及金额、天数、百分比等具体数字，务必核对准确。\n"
+    "6. 禁止给出超出制度范围的建议（如\"可以申请更多年假\"）。\n"
+    "7. 如果问题包含多个子问题，必须逐项覆盖，不能漏答。\n"
+    "8. 若上下文中存在相互矛盾的信息，先说明冲突，再按优先级给出结论。\n"
+    "9. 只允许复述文档中明确出现的规则，禁止补充文档未出现的条件、阈值或例外。\n"
+    "10. 禁止使用\"通常\"\"一般\"\"可能\"\"建议\"等推测性表述。\n\n"
+    "【正例】\n"
+    "- 资料原文：\"病假超过30天需提供三甲医院证明\"\n"
+    "  ✅ 正确回答：\"根据规定，病假超过30天需要提供三甲医院证明。\"\n"
+    "- 资料原文未提及工资发放\n"
+    "  ✅ 正确回答：\"资料中未找到病假工资发放的相关信息。\"\n\n"
+    "【反例】\n"
+    "- 资料未提及金额\n"
+    "  ❌ 错误回答：\"出差补贴一般为每天200元。\"（注：补充了外部知识）\n"
+    "- 资料只说了病假天数\n"
+    "  ❌ 错误回答：\"建议您尽快提交病假申请。\"（注：使用了建议性表述）\n"
 )
         prompt = f"{system_prompt}\n\n根据资料：{context} 回答：{rewritten}"
-        response = await self.llm.ainvoke(prompt) 
+        response = await self.llm.ainvoke(prompt)
         return {"answer": response.content}

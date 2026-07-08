@@ -1,0 +1,2 @@
+﻿"sample_count","avg_faithfulness","avg_answer_relevancy","avg_context_precision","avg_context_recall","avg_strict_score","intent_accuracy","expected_policy_hit_rate","top1_source_hit_rate","top3_source_hit_rate","no_answer_rejection_accuracy","avg_latency_seconds","avg_retrieval_count","retrieval_cache_hit_rate","answer_cache_hit_rate"
+"40","0.653","0.6201","0.5796","0.7458","0.7945","1","1","0.85","0.875","1","29.919","4.18","0.025","0"

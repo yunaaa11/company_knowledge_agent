@@ -1,0 +1,6 @@
+﻿variant,sample_count,avg_faithfulness,avg_answer_relevancy,avg_context_precision,avg_context_recall,avg_strict_score,intent_accuracy,expected_policy_hit_rate,top1_source_hit_rate,top3_source_hit_rate,no_answer_rejection_accuracy,avg_latency_seconds,avg_retrieval_count,retrieval_cache_hit_rate,answer_cache_hit_rate
+baseline_vector_only,40,0.0,0.0,0.0,0.0,0.0,1.0,0.975,0.9,0.9,0.75,3.711,3.7,1.0,0.0
+hybrid_bm25_vector,40,0.0,0.0,0.0,0.0,0.0,1.0,0.975,0.9,0.9,0.75,3.629,3.7,1.0,0.0
+plus_rerank,40,0.0,0.0,0.0,0.0,0.0,1.0,0.975,0.9,0.9,0.75,4.015,3.7,1.0,0.0
+plus_intent_filter,40,0.0,0.0,0.0,0.0,0.0,1.0,0.975,0.9,0.9,0.75,3.745,3.7,1.0,0.0
+full_pipeline,40,0.0,0.0,0.0,0.0,0.0,1.0,0.975,0.85,0.875,1.0,31.991,5.12,0.375,0.0

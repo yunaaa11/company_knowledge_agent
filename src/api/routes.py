@@ -10,6 +10,7 @@ from config import Config
 from src.agent.workflow import create_graph
 from src.cache.redis_client import RedisCache
 from src.retrieval.hybrid_search import HybridSearcher
+from src.retrieval.intent import classify_query_intent
 from src.retrieval.reranker import RerankProcessor
 from src.retrieval.vector_store import VectorStoreManager
 
@@ -59,13 +60,24 @@ class ChatRequest(BaseModel):
 @router.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     async def stream_generator():
+        # 从 chat_history 中提取上一轮的 intent，用于追问继承
+        prev_intent = None
+        if request.chat_history:
+            for item in reversed(request.chat_history):
+                if isinstance(item, dict) and item.get("role") == "user":
+                    prev_intent = classify_query_intent(item.get("content", ""))
+                    break
+
         inputs = {
             "query": request.query,
             "chat_history": request.chat_history,
             "loop_step": 0,
+            "prev_intent": prev_intent,
+            "prev_documents": [],
         }
         # 缓存键生成与命中处理
         cache_key = None
+        stateless_cache_key = None
         if redis_cache:
             # 检查缓存 根据 query、历史、知识库版本等生成缓存键。
             cache_key = redis_cache.generate_query_key(
@@ -76,7 +88,16 @@ async def chat_endpoint(request: ChatRequest):
                 prefix=Config.CACHE_KEY_PREFIX,
             )
             #如果缓存命中，直接流式返回缓存的改写问句和完整答案，并标记 cache_hit: true，结束。
+            stateless_cache_key = redis_cache.generate_query_key(
+                query=request.query,
+                chat_history=[],
+                index_version=Config.INDEX_VERSION,
+                prompt_version=Config.PROMPT_VERSION,
+                prefix=Config.CACHE_KEY_PREFIX,
+            )
             cached_res = redis_cache.get_cache(cache_key)
+            if not cached_res and stateless_cache_key != cache_key:
+                cached_res = redis_cache.get_cache(stateless_cache_key)
             if cached_res:
                 rewrite = cached_res.get("rewrite_query")
                 cached_sources = cached_res.get("sources", [])
@@ -135,15 +156,14 @@ async def chat_endpoint(request: ChatRequest):
 
                 if kind == "on_chain_end" and (name in {"generate_node", "generate"} or node == "generate"):
                     if redis_cache and cache_key and final_answer:
-                        redis_cache.set_json(
-                            cache_key,
-                            {
-                                "answer": final_answer,
-                                "rewrite_query": final_rewrite,
-                                "sources": final_sources,
-                            },
-                            expire=Config.ANSWER_CACHE_TTL,
-                        )
+                        cache_payload = {
+                            "answer": final_answer,
+                            "rewrite_query": final_rewrite,
+                            "sources": final_sources,
+                        }
+                        redis_cache.set_json(cache_key, cache_payload, expire=Config.ANSWER_CACHE_TTL)
+                        if stateless_cache_key and stateless_cache_key != cache_key:
+                            redis_cache.set_json(stateless_cache_key, cache_payload, expire=Config.ANSWER_CACHE_TTL)
                     yield "data: [DONE]\n\n"
 
         except Exception as exc:

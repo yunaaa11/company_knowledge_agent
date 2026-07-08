@@ -1,4 +1,4 @@
-import os
+﻿import os
 
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -19,17 +19,17 @@ class VectorStoreManager:
         self.db_path = db_path or Config.db_path
         self.store_path = store_path or Config.store_path
         os.makedirs(self.store_path, exist_ok=True)
-        #向量库初始化
+       
         self.embeddings = HuggingFaceEmbeddings(model_name=Config.HUGGINGFACEHUB_MODEL_NAME)
         self.vectorstore = Chroma(
             collection_name="enterprise_paper",
             embedding_function=self.embeddings,
             persist_directory=self.db_path,
         )
-        #文档存储抽象
+       
         raw_fs = LocalFileStore(self.store_path)
         self.docstore = create_kv_docstore(raw_fs)
-       #父子分割器配置
+      
         self.parent_splitter = RecursiveCharacterTextSplitter(
             chunk_size=Config.PARENT_CHUNK_SIZE,
             chunk_overlap=Config.PARENT_CHUNK_OVERLAP,
@@ -42,10 +42,10 @@ class VectorStoreManager:
         )
 
     def get_parent_retriever(self):
-        """返回父检索器"""
         return ParentDocumentRetriever(
             vectorstore=self.vectorstore,
             docstore=self.docstore,
             parent_splitter=self.parent_splitter,
             child_splitter=self.child_splitter,
         )
+

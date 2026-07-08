@@ -3,12 +3,14 @@ import os
 import time
 from typing import Any, Dict, Iterable, List, Tuple
 
+import pandas as pd
 import requests
 import streamlit as st
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
 CHAT_URL = f"{API_BASE_URL}/api/v1/chat"
 HEALTH_URL = f"{API_BASE_URL}/health"
+REPORT_DIR = "reports/v2_complex_eval"
 
 EXAMPLE_QUESTIONS = [
     "\u5e74\u5047\u5929\u6570\u548c\u5de5\u9f84\u6709\u4ec0\u4e48\u5173\u7cfb\uff1f",
@@ -144,6 +146,7 @@ def inject_css() -> None:
 
 
 def build_chat_history() -> List[Dict[str, str]]:
+    """将用户输入和最近 8 条对话历史打包成 JSON，发送给后端"""
     return [
         {"role": item["role"], "content": item["content"]}
         for item in st.session_state.messages[-8:]
@@ -228,7 +231,7 @@ def render_sidebar(healthy: bool) -> None:
         for question in EXAMPLE_QUESTIONS:
             if st.button(question, use_container_width=True):
                 st.session_state.pending_question = question
-
+        #会话状态管理：利用 st.session_state 持久化消息历史、缓存标志、延迟时间。
         st.divider()
         if st.button("\u6e05\u7a7a\u5bf9\u8bdd", use_container_width=True):
             st.session_state.messages = []
@@ -272,6 +275,7 @@ def render_backend_hint() -> None:
 
 
 def render_debug_panel() -> None:
+    """折叠在底部，展示改写后的查询和召回文档详情（包含文件名、相关性分数、片段）"""
     with st.expander("\u68c0\u7d22\u8c03\u8bd5\u4fe1\u606f", expanded=False):
         rewrite = st.session_state.last_rewrite
         if rewrite:
@@ -307,47 +311,147 @@ def render_debug_panel() -> None:
                 st.write(source.get("page_content") or source.get("snippet", ""))
 
 
+
+def read_report_csv(name: str) -> pd.DataFrame:
+    path = os.path.join(REPORT_DIR, name)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def render_metric_card(label: str, value, help_text: str = "") -> None:
+    st.metric(label, value, help=help_text or None)
+
+
+def render_eval_dashboard() -> None:
+    """评估看板"""
+    st.markdown("### 复杂 RAG 评估看板")
+    st.caption("读取 reports/v2_complex_eval/ 下的评估结果，展示检索召回、意图命中、无答案拒答和 ablation 对比。")
+
+    summary = read_report_csv("eval_summary.csv")
+    category = read_report_csv("category_summary.csv")
+    ablation = read_report_csv("ablation_summary.csv")
+    errors = read_report_csv("error_cases.csv")
+    report = read_report_csv("eval_report.csv")
+
+    if summary.empty and category.empty and ablation.empty and report.empty:
+        st.info("还没有生成评估报告。可以先运行下面两条命令生成基础诊断结果。")
+        st.code("python test/run_eval_complex.py --skip-ragas", language="powershell")
+        st.code("python test/run_ablation_complex.py --limit 10", language="powershell")
+        return
+
+    if not summary.empty:
+        row = summary.iloc[0]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("样本数", int(row.get("sample_count", 0)))
+        c2.metric("预期制度命中率", f"{row.get('expected_policy_hit_rate', 0):.2%}")
+        c3.metric("Top3 来源命中率", f"{row.get('top3_source_hit_rate', 0):.2%}")
+        c4.metric("平均耗时", f"{row.get('avg_latency_seconds', 0):.2f}s")
+
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("意图命中率", f"{row.get('intent_accuracy', 0):.2%}")
+        c6.metric("无答案拒答准确率", f"{row.get('no_answer_rejection_accuracy', 0):.2%}")
+        c7.metric("平均召回文档数", f"{row.get('avg_retrieval_count', 0):.2f}")
+        c8.metric("Strict Score", f"{row.get('avg_strict_score', 0):.3f}")
+
+    if not category.empty:
+        st.markdown("#### 分类表现")
+        chart_df = category.set_index("category")[[col for col in ["expected_policy_hit_rate", "top3_source_hit_rate", "avg_strict_score"] if col in category.columns]]
+        if not chart_df.empty:
+            st.bar_chart(chart_df)
+        st.dataframe(category, use_container_width=True)
+
+    if not ablation.empty:
+        st.markdown("#### Ablation 对比")
+        display_cols = [col for col in ["variant", "expected_policy_hit_rate", "top3_source_hit_rate", "intent_accuracy", "avg_latency_seconds", "avg_retrieval_count", "avg_strict_score"] if col in ablation.columns]
+        st.dataframe(ablation[display_cols], use_container_width=True)
+        if "variant" in ablation.columns:
+            chart_cols = [col for col in ["expected_policy_hit_rate", "top3_source_hit_rate", "avg_strict_score"] if col in ablation.columns]
+            if chart_cols:
+                st.bar_chart(ablation.set_index("variant")[chart_cols])
+
+    if not report.empty:
+        st.markdown("#### 检索明细")
+        filters = st.multiselect("按问题类型筛选", sorted(report["category"].dropna().unique().tolist()) if "category" in report.columns else [])
+        view = report
+        if filters:
+            view = view[view["category"].isin(filters)]
+        show_cols = [
+            col for col in [
+                "id",
+                "category",
+                "question",
+                "intent",
+                "expected_policy_type",
+                "hit_expected_policy",
+                "top1_source_hit",
+                "top3_source_hit",
+                "original_query_doc_count",
+                "rewrite_query_doc_count",
+                "hyde_query_doc_count",
+                "retrieval_cache_hit",
+                "retrieved_sources",
+                "answer",
+            ] if col in view.columns
+        ]
+        st.dataframe(view[show_cols], use_container_width=True, height=360)
+
+    if not errors.empty:
+        st.markdown("#### 需要重点排查的样本")
+        show_cols = [col for col in ["id", "category", "question", "expected_policy_type", "retrieved_policy_types", "retrieved_sources", "answer"] if col in errors.columns]
+        st.dataframe(errors[show_cols], use_container_width=True, height=260)
+
+
 def main() -> None:
     st.set_page_config(page_title="\u4f01\u4e1a\u884c\u653f\u77e5\u8bc6\u5e93\u95ee\u7b54", page_icon="\U0001F4DA", layout="wide")
     init_state()
     inject_css()
     healthy = api_health()
     render_sidebar(healthy)
-    render_header(healthy)
+    tab_chat, tab_eval = st.tabs(["问答演示", "评估看板"])
 
-    if not healthy:
-        render_backend_hint()
+    with tab_chat:
+        render_header(healthy)
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+        if not healthy:
+            render_backend_hint()
 
-    pending = st.session_state.pop("pending_question", None)
-    query = pending or st.chat_input("\u8bf7\u8f93\u5165\u5173\u4e8e\u516c\u53f8\u5236\u5ea6\u3001\u62a5\u9500\u3001\u8bf7\u5047\u3001IT \u652f\u6301\u7b49\u95ee\u9898")
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
 
-    if query:
-        st.session_state.messages.append({"role": "user", "content": query})
-        with st.chat_message("user"):
-            st.markdown(query)
+        pending = st.session_state.pop("pending_question", None)
+        query = pending or st.chat_input("请输入关于公司制度、报销、请假、IT 支持等问题")
 
-        with st.chat_message("assistant"):
-            start = time.perf_counter()
-            try:
-                answer, meta = stream_chat(query)
-            except requests.RequestException as exc:
-                answer = f"\u8bf7\u6c42\u540e\u7aef\u5931\u8d25\uff1a{exc}"
-                meta = {"rewrite_query": None, "sources": [], "cache_hit": False, "error": answer}
-                st.warning(answer)
-            st.session_state.last_latency = time.perf_counter() - start
+        if query:
+            st.session_state.messages.append({"role": "user", "content": query})
+            with st.chat_message("user"):
+                st.markdown(query)
 
-        st.session_state.messages.append({"role": "assistant", "content": answer})
-        st.session_state.last_rewrite = meta.get("rewrite_query")
-        st.session_state.last_sources = meta.get("sources", [])
-        st.session_state.last_cache_hit = bool(meta.get("cache_hit"))
-        st.session_state.last_retrieval_cache_hit = bool(meta.get("retrieval_cache_hit"))
-        st.rerun()
+            with st.chat_message("assistant"):
+                start = time.perf_counter()
+                try:
+                    answer, meta = stream_chat(query)
+                except requests.RequestException as exc:
+                    answer = f"后端请求失败：{exc}"
+                    meta = {"rewrite_query": None, "sources": [], "cache_hit": False, "error": answer}
+                    st.warning(answer)
+                st.session_state.last_latency = time.perf_counter() - start
 
-    render_debug_panel()
+            st.session_state.messages.append({"role": "assistant", "content": answer})
+            st.session_state.last_rewrite = meta.get("rewrite_query")
+            st.session_state.last_sources = meta.get("sources", [])
+            st.session_state.last_cache_hit = bool(meta.get("cache_hit"))
+            st.session_state.last_retrieval_cache_hit = bool(meta.get("retrieval_cache_hit"))
+            st.rerun()
+
+        render_debug_panel()
+
+    with tab_eval:
+        render_eval_dashboard()
 
 
 if __name__ == "__main__":

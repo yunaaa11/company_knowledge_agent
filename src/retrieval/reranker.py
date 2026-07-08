@@ -1,11 +1,11 @@
-import hashlib
+﻿import hashlib
 import os
 
 from langchain_classic.retrievers import ContextualCompressionRetriever
 from langchain_community.document_compressors import FlashrankRerank
 
 from config import Config
-from src.retrieval.intent import classify_query_intent
+from src.retrieval.intent import classify_query_intent, classify_query_intents
 
 
 class RerankProcessor:
@@ -22,19 +22,21 @@ class RerankProcessor:
         )
 
     def _iter_retrievers(self, retriever):
-        """递归找出所有底层检索器"""
         yield retriever
         for child in getattr(retriever, "retrievers", []) or []:
             yield from self._iter_retrievers(child)
 
     def _apply_vector_filter(self, intent):
-        """瞬态过滤器 动态修改向量库的 search_kwargs，只检索对应类别的文档（比如问“年假”就只查 policy_type="leave" 的索引）。"""
         previous = []
         if not intent or not Config.ENABLE_INTENT_FILTER:
             return previous
+        if isinstance(intent, (list, tuple, set)):
+            intent_values = [item for item in intent if item]
+            if len(intent_values) != 1:
+                return previous
+            intent = intent_values[0]
         for retriever in self._iter_retrievers(self.compression_retriever.base_retriever):
             if hasattr(retriever, "search_kwargs"):
-                # 深拷贝一份旧的 search_kwargs（防止后续修改影响原对象
                 old_kwargs = dict(getattr(retriever, "search_kwargs", {}) or {})
                 new_kwargs = dict(old_kwargs)
                 new_kwargs["filter"] = {"policy_type": intent}
@@ -44,18 +46,40 @@ class RerankProcessor:
 
     @staticmethod
     def _restore_vector_filter(previous):
-        """瞬态过滤器"""
         for retriever, old_kwargs in previous:
             retriever.search_kwargs = old_kwargs
 
     @staticmethod
     def _filter_by_intent(docs, intent, min_keep=2):
-        """后过滤兜底"""
-        #即使向量检索时漏过了意图过滤，这里再强制筛一遍。但有个保底逻辑：如果筛完后剩下的文档少于 2 个，说明过滤太狠了，干脆全部保留，宁滥勿缺
         if not intent or not Config.ENABLE_INTENT_FILTER:
             return docs
-        matched = [doc for doc in docs if (doc.metadata or {}).get("policy_type") == intent]
-        return matched if len(matched) >= min_keep else docs
+        intents = list(intent) if isinstance(intent, (list, tuple, set)) else [intent]
+        intents = [item for item in intents if item]
+        if not intents:
+            return docs
+
+        min_required = 1 if len(intents) == 1 else min_keep
+
+        # Step 1: 严格匹配 — policy_type == intent
+        strict_matched = [doc for doc in docs if (doc.metadata or {}).get("policy_type") in intents]
+        if len(strict_matched) >= min_required:
+            return strict_matched
+
+        # Step 2: 宽松多标签匹配 — intent 在 policy_types (列表) 中
+        strict_ids = {id(d) for d in strict_matched}
+        relaxed = list(strict_matched)
+        for doc in docs:
+            if id(doc) in strict_ids:
+                continue
+            policy_types = (doc.metadata or {}).get("policy_types", [])
+            if any(intent_item in policy_types for intent_item in intents):
+                relaxed.append(doc)
+
+        if len(relaxed) >= min_required:
+            return relaxed
+
+        # 完全回退 —— 返回所有文档
+        return docs
 
     @staticmethod
     def _score(doc):
@@ -71,20 +95,55 @@ class RerankProcessor:
         content_preview = doc.page_content[:200]
         return hashlib.md5(f"{source}_{content_preview}".encode("utf-8")).hexdigest()
 
-    def retrieve(self, query: str):
+    @staticmethod
+    def _safe_log_text(value):
+        return str(value).encode("gbk", errors="backslashreplace").decode("gbk")
+
+    @staticmethod
+    def _source_rule_score(query, source):
+        text = query or ""
+        source = source or ""
+        rules = [
+            (("离职", "交接"), "11_员工入职转正与离职交接制度", 2),
+            (("账号", "账户", "权限", "设备"), "11_员工入职转正与离职交接制度", 1),
+            (("预付款", "付款", "预算"), "12_预算管理与付款审批制度", 2),
+            (("合同", "采购", "法务", "审核"), "07_采购与合同审批制度", 2),
+            (("密码", "数据级别", "敏感数据"), "04_信息安全与数据分级管理规范", 2),
+            (("客户资料", "商业秘密"), "13_客户资料与商业秘密保护制度", 2),
+            (("工单", "P1", "故障", "响应", "解决"), "03_IT服务与设备权限管理制度", 2),
+            (("绩效", "申诉", "考核"), "06_绩效考核与申诉管理制度", 2),
+        ]
+        score = 0
+        for keywords, source_marker, weight in rules:
+            if source_marker in source and any(keyword in text for keyword in keywords):
+                score += weight
+        return score
+
+    def _apply_source_boost(self, query, docs):
+        for doc in docs:
+            metadata = doc.metadata or {}
+            base_score = self._score(doc)
+            boost = self._source_rule_score(query, metadata.get("source", "")) * Config.SOURCE_RULE_BOOST
+            if boost:
+                metadata["relevance_score"] = base_score + boost
+                metadata["source_rule_boost"] = boost
+                doc.metadata = metadata
+        docs.sort(key=self._score, reverse=True)
+        return docs
+
+    def retrieve(self, query: str, prev_intent: str | None = None):
         raw = []
-        #意图识别 + 预过滤
-        intent = classify_query_intent(query)
-        previous_filters = self._apply_vector_filter(intent)
+        intent = classify_query_intent(query, prev_intent=prev_intent)
+        intents = classify_query_intents(query, prev_intent=prev_intent)
+        previous_filters = self._apply_vector_filter(intents or intent)
         try:
-            #初步召回（Base Retriever）
-            raw = self.compression_retriever.base_retriever.invoke(query)
-            raw = self._filter_by_intent(raw, intent)
-            print(f"retrieval summary: query='{query}' | raw={len(raw)} | intent={intent}")
+            safe_query = self._safe_log_text(query)
+            print(f"retrieval summary: query='{safe_query}' | intent={intent} | intents={intents}")
 
             results = self.compression_retriever.invoke(query)
-            results = self._filter_by_intent(results, intent)
-            print(f"rerank summary: query='{query}' | reranked={len(results)}")
+            results = self._filter_by_intent(results, intents or intent)
+            results = self._apply_source_boost(query, results)
+            print(f"rerank summary: query='{safe_query}' | reranked={len(results)}")
 
             seen = set()
             unique_results = []
@@ -100,7 +159,6 @@ class RerankProcessor:
 
             scores = [self._score(doc) for doc in unique_results]
             filtered_results = [unique_results[0]]
-            #分数断崖截断算法
             for i in range(1, len(unique_results)):
                 current_score = scores[i]
                 prev_score = scores[i - 1]
@@ -109,7 +167,7 @@ class RerankProcessor:
                 if current_score < self.min_score:
                     break
                 filtered_results.append(unique_results[i])
-            #保底兜底
+
             if len(filtered_results) < 2:
                 for doc in unique_results[1:]:
                     if doc in filtered_results:
@@ -124,8 +182,7 @@ class RerankProcessor:
                 doc.metadata.setdefault("rerank_rank", i)
             return final_docs
         except Exception as e:
-            print(f"Rerank error: {e}")
+            print(f"Rerank error: {self._safe_log_text(e)}")
             return raw[: self.top_n]
         finally:
-        #无论重排序成功、失败、抛异常，只要 previous_filters 不为空，就一定会在最后一步把检索器恢复原状。
             self._restore_vector_filter(previous_filters)

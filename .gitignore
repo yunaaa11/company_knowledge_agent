@@ -30,9 +30,19 @@ logs/
 *.log
 temp/
 
+# 评估报告
 evaluation_report.csv
 eval_report.csv
-reports/eval_report1.csv
-reports/eval_summary1.csv
-reports/eval_report2.csv
-reports/eval_summary2.csv
+reports/**/*.csv
+
+# GitHub 只保留展示和复盘用的汇总结果
+!reports/**/eval_summary*.csv
+!reports/**/category_summary*.csv
+!reports/**/ablation_summary.csv
+!reports/**/error_cases*.csv
+
+# 评估中间产物与逐题完整明细不要上传
+reports/**/*checkpoint*.csv
+reports/**/*part*.csv
+reports/**/eval_report*.csv
+reports/**/testset*.csv

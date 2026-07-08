@@ -1,38 +1,82 @@
-import pickle
-from langchain_classic.retrievers import EnsembleRetriever
-from config import Config
 import os
+import pickle
+
+from langchain_core.documents import Document
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from config import Config
+from src.retrieval.intent import infer_policy_type, infer_policy_types
+
 
 class HybridSearcher:
     def __init__(self, vector_manager, bm25_path=Config.bm25_path):
         self.vector_retriever = vector_manager.get_parent_retriever()
         if hasattr(self.vector_retriever, "search_kwargs"):
             self.vector_retriever.search_kwargs = {"k": Config.VECTOR_TOP_K}
-    
-        # 加载 BM25 (注意添加路径检查)
-        #bm25_path:保存 BM25 检索器的索引数据（倒排索引、文档长度等统计信息）
-        if os.path.exists(Config.bm25_path):
-            # 加载索引构建阶段生成的 BM25 
-            with open(Config.bm25_path, "rb") as f:
-                 # pickle.load 反序列化，将文件中的对象恢复为 BM25 检索器实例
-                self.bm25_retriever = pickle.load(f)
-                print(f"✅ BM25 成功加载，索引内含文档数: {len(self.bm25_retriever.docs)}")
-            # 设置每次检索返回的文档数量
-            self.bm25_retriever.k = Config.BM25_TOP_K
-        else:
-                print(f"⚠️ 警告: 未找到 BM25 索引文件 {Config.bm25_path}")
-                self.bm25_retriever = None
-    
+
+        self.bm25_path = bm25_path or Config.bm25_path
+        self.bm25_retriever = self._load_bm25()
+
+    def _load_bm25(self):
+        if not self.bm25_path or not os.path.exists(self.bm25_path):
+            print(f"Warning: BM25 index file not found: {self.bm25_path}")
+            return None
+
+        try:
+            with open(self.bm25_path, "rb") as f:
+                bm25_retriever = pickle.load(f)
+            bm25_retriever.k = Config.BM25_TOP_K
+            doc_count = len(getattr(bm25_retriever, "docs", []))
+            print(f"BM25 loaded, docs: {doc_count}")
+            return bm25_retriever
+        except Exception as exc:
+            print(f"Warning: failed to load BM25 index; rebuilding lightweight BM25: {exc}")
+            return self._build_bm25_from_raw_docs()
+
+    def _build_bm25_from_raw_docs(self):
+        raw_dir = os.getenv("RAW_ENHANCED_DIR", "data/raw/enhanced")
+        if not os.path.isdir(raw_dir):
+            return None
+
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=Config.CHILD_CHUNK_SIZE,
+            chunk_overlap=Config.CHILD_CHUNK_OVERLAP,
+            separators=["\n## ", "\n### ", "\n\n", "\n", "。", "；", "，", " ", ""],
+        )
+        docs = []
+        for name in os.listdir(raw_dir):
+            if not name.endswith(".md"):
+                continue
+            if name.upper() == "README.MD":
+                continue
+            path = os.path.join(raw_dir, name)
+            try:
+                text = open(path, "r", encoding="utf-8").read()
+            except UnicodeDecodeError:
+                text = open(path, "r", encoding="utf-8-sig").read()
+            metadata = {
+                "source": path,
+                "policy_type": infer_policy_type(path),
+                "policy_types": infer_policy_types(path),
+            }
+            docs.extend(splitter.split_documents([Document(page_content=text, metadata=metadata)]))
+
+        if not docs:
+            return None
+        bm25_retriever = BM25Retriever.from_documents(docs)
+        bm25_retriever.k = Config.BM25_TOP_K
+        print(f"BM25 rebuilt from raw docs, chunks: {len(docs)}")
+        return bm25_retriever
+
     def get_ensemble_retriever(self):
-        """
-        融合 RRF。
-        注意：如果 bm25 加载失败，退化为单一向量检索
-        """
+        """Return hybrid retriever, or vector retriever when BM25 is unavailable."""
         if not self.bm25_retriever:
             return self.vector_retriever
-            
+
         return EnsembleRetriever(
             retrievers=[self.bm25_retriever, self.vector_retriever],
-            #微调权重：提升 BM25 的影响力，利用关键词频次锁定行政文档
-            weights=[0.4, 0.6] 
+            weights=[0.35, 0.65],
         )
+

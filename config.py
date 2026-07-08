@@ -57,7 +57,7 @@ class Config:
     BM25_TOP_K = _get_int("BM25_TOP_K", 12)
     RERANK_TOP_N = _get_int("RERANK_TOP_N", 8)
     RERANK_MIN_SCORE = _get_float("RERANK_MIN_SCORE", 0.2)
-    RERANK_SCORE_DROP = _get_float("RERANK_SCORE_DROP", 0.2)
+    RERANK_SCORE_DROP = _get_float("RERANK_SCORE_DROP", 0.25)
     MAX_FUSED_DOCS = _get_int("MAX_FUSED_DOCS", 6)
 
     # Layered cache TTLs, in seconds
@@ -73,8 +73,9 @@ Config.CHILD_CHUNK_OVERLAP = _get_int("CHILD_CHUNK_OVERLAP", 60)
 
 # Retrieval quality features
 Config.ENABLE_INTENT_FILTER = _get_bool("ENABLE_INTENT_FILTER", True)
-Config.ENABLE_HYDE = _get_bool("ENABLE_HYDE", True)
+Config.ENABLE_HYDE = _get_bool("ENABLE_HYDE", False)
 Config.HYDE_CACHE_TTL = _get_int("HYDE_CACHE_TTL", 3600)
-Config.ORIGINAL_QUERY_WEIGHT = _get_float("ORIGINAL_QUERY_WEIGHT", 1.25)
-Config.REWRITTEN_QUERY_WEIGHT = _get_float("REWRITTEN_QUERY_WEIGHT", 1.0)
-Config.HYDE_QUERY_WEIGHT = _get_float("HYDE_QUERY_WEIGHT", 0.75)
+Config.ORIGINAL_QUERY_WEIGHT = _get_float("ORIGINAL_QUERY_WEIGHT", 1.5)
+Config.REWRITTEN_QUERY_WEIGHT = _get_float("REWRITTEN_QUERY_WEIGHT", 0.8)
+Config.HYDE_QUERY_WEIGHT = _get_float("HYDE_QUERY_WEIGHT", 0.4)
+Config.SOURCE_RULE_BOOST = _get_float("SOURCE_RULE_BOOST", 0.18)

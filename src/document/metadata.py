@@ -6,7 +6,7 @@ from typing import Iterable, List
 
 from langchain_core.documents import Document
 
-from src.retrieval.intent import infer_policy_type
+from src.retrieval.intent import infer_policy_type, infer_policy_types
 
 HEADING_RE = re.compile(r"^(#{1,3})\s+(.+)$")
 
@@ -24,6 +24,7 @@ def split_markdown_sections(doc: Document) -> List[Document]:
     source = doc.metadata.get("source", "")
     title = extract_title(doc.page_content, source)
     policy_type = infer_policy_type(source, title)
+    policy_types = infer_policy_types(source, title)
     lines = doc.page_content.splitlines()
     sections: List[Document] = []
     current_lines: List[str] = []
@@ -39,6 +40,7 @@ def split_markdown_sections(doc: Document) -> List[Document]:
         metadata.update({
             "doc_title": title,
             "policy_type": policy_type,
+            "policy_types": policy_types,
             "section_title": current_section,
             "source": source,
         })
@@ -69,6 +71,7 @@ def enrich_document_metadata(doc: Document) -> Document:
     metadata.setdefault("doc_title", title)
     metadata.setdefault("section_title", title)
     metadata.setdefault("policy_type", infer_policy_type(source, title))
+    metadata.setdefault("policy_types", infer_policy_types(source, title))
     metadata.setdefault("source", source)
     if "page" in metadata and "page_number" not in metadata:
         metadata["page_number"] = metadata["page"]
